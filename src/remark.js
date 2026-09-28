@@ -1,7 +1,8 @@
 "use strict";
 
 const herdr = require("./herdr");
-const STATUSES = ["idle", "working", "blocked", "done", "unknown"];
+const STATUS_TEXT = { idle: "read", working: "working", blocked: "blocked",
+  done: "unread", unknown: "unknown" };
 
 function clean(text) {
   return Array.from(String(text || "")
@@ -16,23 +17,34 @@ function initialNote(pane) {
 }
 
 function isUnread(pane) {
-  return pane.state_labels?.idle === "unread" || pane.agent_status === "done";
+  return manualUnread(pane) || pane.agent_status === "done";
+}
+
+function manualUnread(pane) {
+  return !!pane.tokens?.remark_unread || pane.state_labels?.idle === "unread";
 }
 
 function setUnread(pane, unread) {
-  const labels = Object.fromEntries(STATUSES.map(status =>
-    [status, unread || status === "done" ? "unread" : "read"]));
-  if (STATUSES.every(s => pane.state_labels?.[s] === labels[s])) return;
-  // state_text inherits the same live theme color as state_icon.
-  // Change presentation only; never report an artificial agent lifecycle state.
+  const tab = herdr.cli(["tab", "list", "--workspace", pane.workspace_id]).tabs
+    ?.find(tab => tab.tab_id === pane.tab_id);
+  const context = [clean(tab?.label), clean(herdr.branch(pane.cwd))].filter(Boolean);
+  const labels = Object.fromEntries(Object.entries(STATUS_TEXT).map(([state, text]) =>
+    [state, [text, ...context].join("|")]));
+  const marker = unread ? "● unread" : "";
+  if ((pane.tokens?.remark_unread || "") === marker &&
+    Object.entries(labels).every(([k, v]) => pane.state_labels?.[k] === v)) return;
+  // Herdr selects and colors state_text alongside its native lamp. One text
+  // field avoids the fixed wide separators between separate sidebar tokens.
   herdr.cli(["pane", "report-metadata", pane.pane_id, "--source", "plugin:" + herdr.ID,
-    ...STATUSES.flatMap(s => ["--state-label", s + "=" + labels[s]])]);
+    ...Object.entries(labels).flatMap(([k, v]) => ["--state-label", k + "=" + v]),
+    ...(marker ? ["--token", "remark_unread=" + marker] : ["--clear-token", "remark_unread"])]);
 }
 
 function toggle(pane) {
   const unread = !isUnread(pane);
   if (!unread && pane.agent_status === "done") {
     herdr.cli(["agent", "focus", pane.pane_id]);
+    pane = herdr.cli(["pane", "get", pane.pane_id]).pane;
   }
   setUnread(pane, unread);
   return unread;
@@ -47,18 +59,25 @@ function saveNote(terminalId, note) {
 }
 
 function initialize() {
-  for (const pane of herdr.cli(["agent", "list"]).agents || []) setUnread(pane, false);
+  for (const pane of herdr.cli(["agent", "list"]).agents || []) setUnread(pane, manualUnread(pane));
 }
 
 function event() {
   const envelope = JSON.parse(process.env.HERDR_PLUGIN_EVENT_JSON || "{}");
   const data = envelope.data || envelope;
+  const name = process.env.HERDR_PLUGIN_EVENT || envelope.event;
+  if (name === "tab.renamed" || name === "tab.moved") {
+    const tabId = data.tab_id || data.tab?.tab_id;
+    for (const pane of herdr.cli(["agent", "list"]).agents || []) {
+      if (pane.tab_id === tabId) setUnread(pane, manualUnread(pane));
+    }
+    return;
+  }
   const id = data.pane_id || data.pane?.pane_id;
   if (!id) return;
   const pane = herdr.cli(["pane", "get", id]).pane;
   if (!pane?.agent) return;
-  const name = process.env.HERDR_PLUGIN_EVENT || envelope.event;
-  setUnread(pane, name === "pane.focused" ? false : pane.state_labels?.idle === "unread");
+  setUnread(pane, name === "pane.focused" ? false : manualUnread(pane));
 }
 
 function main(command = process.argv[2]) {

@@ -1,8 +1,8 @@
 # Merge into Herdr config.toml, then run: herdr server reload-config
 [ui.sidebar.agents]
 rows = [
-  ["state_icon", "state_text", "workspace", "tab"],
-  ["agent", "pane"],
+  ["state_icon", "state_text", { token = "$remark_unread", fg = "#9ece6a", dim = false }],
+  ["pane"],
 ]
 
 [[keys.command]]

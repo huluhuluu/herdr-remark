@@ -35,6 +35,14 @@ function paneForTerminal(terminalId) {
   return pane;
 }
 
+function branch(cwd) {
+  if (!cwd) return "";
+  const result = spawnSync("git", ["-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD"], {
+    encoding: "utf8", windowsHide: true, timeout: 3000, stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 ? result.stdout.trim() : "";
+}
+
 function openEditor(pane, initial) {
   let root = path.resolve(__dirname, "..");
   if (root.startsWith("\\\\?\\UNC\\")) root = "\\\\" + root.slice(8);
@@ -47,4 +55,4 @@ function openEditor(pane, initial) {
   ]);
 }
 
-module.exports = { ID, cli, target, paneForTerminal, openEditor };
+module.exports = { ID, cli, target, paneForTerminal, branch, openEditor };
