@@ -1,7 +1,7 @@
 # Merge into Herdr config.toml, then run: herdr server reload-config
 [ui.sidebar.agents]
 # Native default (Catppuccin) lamp colors; blue adds idle + unread.
-# Only one lamp is populated. Empty branch/note tokens disappear automatically.
+# One lamp + directory token is populated. Empty branch/note tokens disappear.
 rows = [
   [
     { token = "$remark_lamp_working", fg = "#f9e2af", dim = false },
@@ -9,7 +9,7 @@ rows = [
     { token = "$remark_lamp_idle", fg = "#a6e3a1", dim = false },
     { token = "$remark_lamp_unread", fg = "#89b4fa", dim = false },
     { token = "$remark_lamp_unknown", fg = "#6c7086", dim = false },
-    "$remark_directory", "$remark_tab",
+    "$remark_tab",
   ],
   [{ token = "$remark_branch", fg = "#7f849c", dim = false }, "$remark_note"],
 ]

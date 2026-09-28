@@ -42,7 +42,7 @@ test("status lamp combines native state and idle unread", () => {
     pane.agent_status = status;
     remark.update(pane, unread);
     assert.deepEqual(Object.entries(pane.tokens).filter(([key]) => key.startsWith("remark_lamp_")),
-      [["remark_lamp_" + lamp, icon]], `${status}, unread=${unread}`);
+      [["remark_lamp_" + lamp, icon + " repo"]], `${status}, unread=${unread}`);
     assert.equal(pane.agent_status, status);
   }
 });
@@ -52,17 +52,17 @@ test("toggle leaves lifecycle state unchanged and focus clears unread", () => {
   process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ pane_id: pane.pane_id });
   pane.agent_status = "idle";
   remark.main("event");
-  assert.equal(pane.tokens.remark_lamp_unread, "○");
+  assert.equal(pane.tokens.remark_lamp_unread, "○ repo");
   pane.agent_status = "blocked";
   process.env.HERDR_PLUGIN_EVENT = "pane.focused"; process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { pane_id: pane.pane_id } });
-  remark.main("event"); assert.equal(pane.tokens.remark_unread, undefined); assert.equal(pane.tokens.remark_lamp_blocked, "●");
+  remark.main("event"); assert.equal(pane.tokens.remark_unread, undefined); assert.equal(pane.tokens.remark_lamp_blocked, "● repo");
 });
 test("native completion is acknowledged and unused metadata is cleared", () => {
   const { pane, calls } = fixture("done");
   pane.state_labels = { idle: "read|Old|branch" };
   assert.equal(remark.toggle(pane), false);
   assert.deepEqual(calls[0], ["agent", "focus", pane.pane_id]);
-  assert.equal(pane.tokens.remark_lamp_idle, "○");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
   assert.deepEqual(pane.state_labels, {});
   const writes = calls.filter(args => args[1] === "report-metadata").length;
   remark.update(pane);
@@ -70,8 +70,11 @@ test("native completion is acknowledged and unused metadata is cleared", () => {
 });
 test("layout metadata is compact and omits an absent branch", () => {
   const { pane } = fixture(); herdr.branch = () => ""; remark.update(pane, false);
-  assert.equal(pane.tokens.remark_directory, "repo"); assert.equal(pane.tokens.remark_branch, undefined); assert.equal(pane.tokens.remark_note, undefined);
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo"); assert.equal(pane.tokens.remark_branch, undefined); assert.equal(pane.tokens.remark_note, undefined);
   assert.equal(pane.tokens.remark_tab, "Build");
+  pane.cwd = "";
+  remark.update(pane, false);
+  assert.equal(pane.tokens.remark_lamp_idle, "○");
 });
 test("note cleaning and terminal identity remain bounded", () => {
   assert.equal(remark.clean("  hello\n\x1b[31m世界\x1b[0m  "), "hello 世界");

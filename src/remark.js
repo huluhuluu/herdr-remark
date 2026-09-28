@@ -28,15 +28,16 @@ function update(pane, unread = !!pane.tokens?.remark_unread) {
     ? "unread" : Object.hasOwn(LAMPS, pane.agent_status) ? pane.agent_status : "unknown";
   const tokens = {
     remark_unread: unread ? "1" : "",
-    remark_directory: directory(pane.cwd),
     remark_tab: clean(tab?.label),
     remark_branch: clean(herdr.branch(pane.cwd)),
     remark_note: clean(pane.label),
   };
-  for (const [key, icon] of Object.entries(LAMPS)) tokens["remark_lamp_" + key] = key === state ? icon : "";
+  const folder = directory(pane.cwd);
+  for (const [key, icon] of Object.entries(LAMPS))
+    tokens["remark_lamp_" + key] = key === state ? [icon, folder].filter(Boolean).join(" ") : "";
   if (!Object.keys(pane.state_labels || {}).length &&
     Object.entries(tokens).every(([k, v]) => (pane.tokens?.[k] || "") === v)) return;
-  // Exactly one lamp token is populated; 0.8.2 supports fixed token colors.
+  // Lamp and directory share one colored token, avoiding Herdr's separator.
   herdr.cli(["pane", "report-metadata", pane.pane_id, "--source", "plugin:" + herdr.ID,
     "--clear-state-labels",
     ...Object.entries(tokens).flatMap(([k, v]) => v ? ["--token", k + "=" + v] : ["--clear-token", k])]);
