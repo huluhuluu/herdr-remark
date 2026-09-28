@@ -1,0 +1,21 @@
+{
+  "name": "herdr-agent-inform",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Herdr plugin: mark an agent unread and pin a short remark on its sidebar row",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "link": "herdr plugin link .",
+    "status": "herdr plugin action invoke status --plugin huluhlu.agent-inform"
+  },
+  "keywords": [
+    "herdr",
+    "herdr-plugin",
+    "agents",
+    "unread",
+    "notifications"
+  ]
+}
