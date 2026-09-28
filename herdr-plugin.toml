@@ -1,123 +1,35 @@
 id = "huluhlu.agent-inform"
-name = "Agent Inform"
-version = "0.2.0"
+name = "Remark"
+version = "0.3.0"
 min_herdr_version = "0.8.2"
-description = "Mark an agent unread and pin a short remark on its sidebar row, with Windows/macOS/Linux desktop popups"
+description = "Two shortcuts: read/unread and a short agent remark"
 platforms = ["windows", "linux", "macos"]
 
-# Re-report tokens and reapply the Agents view after a server restart.
-# Tokens are ephemeral in the server; durable state lives in HERDR_PLUGIN_STATE_DIR.
 [[startup]]
-command = ["node", "src/startup.js"]
-
-# ---------------------------------------------------------------------------
-# Actions
-#
-# `contexts` declares which invocation contexts an action accepts, which is what
-# decides whether Herdr hands it a focused pane, a text selection, or nothing.
-# Herdr 0.8.2 does not list plugin actions in its own right-click menus, so
-# every action here is reached by keybinding (type = "plugin_action", see
-# README) or by the inbox pane, which owns its own mouse input.
-# ---------------------------------------------------------------------------
+command = ["node", "src/remark.js", "init"]
 
 [[actions]]
 id = "toggle-unread"
-title = "Mark agent unread"
-description = "Toggle the unread flag on the focused agent pane"
+title = "Toggle read / unread"
 contexts = ["pane", "global"]
-command = ["node", "src/cli.js", "toggle-unread"]
+command = ["node", "src/remark.js", "toggle-unread"]
 
 [[actions]]
 id = "note"
-title = "Mark unread + remark"
-description = "Mark unread and type a short remark shown on the sidebar row"
+title = "Edit remark"
 contexts = ["pane", "global"]
-command = ["node", "src/cli.js", "note"]
-
-[[actions]]
-id = "note-from-selection"
-title = "Remark from selection"
-description = "Use the selected terminal text as the remark"
-contexts = ["selection", "pane"]
-command = ["node", "src/cli.js", "note-from-selection"]
-
-[[actions]]
-id = "clear"
-title = "Clear unread + remark"
-description = "Clear the unread flag and remark on the focused agent pane"
-contexts = ["pane", "global"]
-command = ["node", "src/cli.js", "clear"]
-
-[[actions]]
-id = "inbox"
-title = "Open unread inbox"
-description = "List every unread agent and its remark"
-contexts = ["global", "pane"]
-command = ["node", "src/cli.js", "inbox"]
-
-[[actions]]
-id = "agents"
-title = "Pick an agent to flag"
-description = "List every running agent so you can flag one you are not looking at"
-contexts = ["global", "pane"]
-command = ["node", "src/cli.js", "agents"]
-
-[[actions]]
-id = "clear-all"
-title = "Clear all unread"
-description = "Clear the unread flag and remark on every pane"
-contexts = ["global"]
-command = ["node", "src/cli.js", "clear-all"]
-
-[[actions]]
-id = "status"
-title = "Show inform status"
-description = "Print state file, socket, and every tracked pane (troubleshooting)"
-contexts = ["global"]
-command = ["node", "src/cli.js", "status"]
-
-# ---------------------------------------------------------------------------
-# Panes
-#
-# `[[panes]]` has no cwd field, and Herdr launches a plugin pane in the
-# canonicalised plugin root, which on Windows is extended-length
-# (`\\?\D:\...`). Node cannot resolve a relative main script from such a cwd,
-# so these commands only work when the pane is opened with an explicit
-# `--cwd`. src/herdr.js openPane() always passes one; open these entrypoints
-# through the plugin's own actions rather than by hand.
-# ---------------------------------------------------------------------------
+command = ["node", "src/remark.js", "note"]
 
 [[panes]]
 id = "note-editor"
 title = "Remark"
-# overlay, not popup. A popup is session-modal, which looks like the better fit
-# for a prompt, but it does not appear in `pane list` and cannot be closed
-# through any plugin-reachable API. Overlay is verified end to end: real
-# keystrokes route into the editor and Enter saves.
-#
-# No width/height here: Herdr rejects the manifest outright with
-# `invalid_plugin_pane_size` unless placement is popup.
 placement = "overlay"
 command = ["node", "src/note-editor.js"]
 
-[[panes]]
-id = "inbox-view"
-title = "Unread inbox"
-placement = "overlay"
-command = ["node", "src/inbox-view.js"]
-
-# ---------------------------------------------------------------------------
-# Event hooks
-# ---------------------------------------------------------------------------
-
-[[events]]
-on = "pane.agent_status_changed"
-command = ["node", "src/on-status.js"]
-
 [[events]]
 on = "pane.focused"
-command = ["node", "src/on-focus.js"]
+command = ["node", "src/remark.js", "event"]
 
 [[events]]
-on = "pane.closed"
-command = ["node", "src/on-closed.js"]
+on = "pane.agent_detected"
+command = ["node", "src/remark.js", "event"]

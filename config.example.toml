@@ -1,0 +1,18 @@
+# Merge into Herdr config.toml, then run: herdr server reload-config
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "state_text", "workspace", "tab"],
+  ["agent", "pane"],
+]
+
+[[keys.command]]
+key = "prefix+u"
+type = "plugin_action"
+command = "huluhlu.agent-inform.toggle-unread"
+description = "toggle read / unread"
+
+[[keys.command]]
+key = "prefix+shift+u"
+type = "plugin_action"
+command = "huluhlu.agent-inform.note"
+description = "edit remark"
