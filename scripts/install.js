@@ -76,9 +76,13 @@ function install({ target = configPath(), check = false, execute = run } = {}) {
       fs.renameSync(staged, target);
     }
     try {
-      execute("herdr", ["server", "reload-config"]);
+      const response = JSON.parse(execute("herdr", ["server", "reload-config"]));
+      if (response.result?.status !== "applied")
+        throw Error(`Config reload: ${JSON.stringify(response)}`);
     } catch (error) {
       if (changed) {
+        if (!fs.existsSync(target) || fs.readFileSync(target, "utf8") !== merged)
+          throw Error(`Reload failed and config changed externally; left it untouched. Backup: ${backup || "none (new config)"}. ${error.message}`);
         if (original) fs.writeFileSync(target, original);
         else fs.unlinkSync(target);
       }

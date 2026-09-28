@@ -21,25 +21,34 @@ function directory(cwd = "") {
   return clean(parser.basename(cwd) || parser.parse(cwd).root);
 }
 
-function update(pane, unread = !!pane.tokens?.remark_unread) {
+function update(pane, unread) {
+  // Only explicit user/focus actions write the unread flag. Background refreshes
+  // must not restore a flag from an older snapshot while Git is running.
+  if (unread !== undefined) herdr.cli(["pane", "report-metadata", pane.pane_id,
+    "--source", "plugin:" + herdr.ID,
+    ...(unread ? ["--token", "remark_unread=1"] : ["--clear-token", "remark_unread"])]);
+  // Herdr hooks run in separate processes. A system monotonic timestamp orders
+  // refreshes even when a rename does not increment the pane's revision.
+  const seq = process.hrtime.bigint().toString();
+  const branch = clean(herdr.branch(pane.cwd));
   const tab = herdr.cli(["tab", "list", "--workspace", pane.workspace_id]).tabs
     ?.find(item => item.tab_id === pane.tab_id);
+  pane = herdr.cli(["pane", "get", pane.pane_id]).pane;
+  unread = !!pane.tokens?.remark_unread;
   const state = pane.agent_status === "done" || (pane.agent_status === "idle" && unread)
     ? "unread" : Object.hasOwn(LAMPS, pane.agent_status) ? pane.agent_status : "unknown";
   const tokens = {
-    remark_unread: unread ? "1" : "",
     remark_tab: clean(tab?.label),
-    remark_branch: clean(herdr.branch(pane.cwd)),
+    remark_branch: branch,
     remark_note: clean(pane.label),
   };
   const folder = directory(pane.cwd);
   for (const [key, icon] of Object.entries(LAMPS))
     tokens["remark_lamp_" + key] = key === state ? [icon, folder].filter(Boolean).join(" ") : "";
-  if (!Object.keys(pane.state_labels || {}).length &&
-    Object.entries(tokens).every(([k, v]) => (pane.tokens?.[k] || "") === v)) return;
   // Lamp and directory share one colored token, avoiding Herdr's separator.
+  // Publish the sequence even if tokens match, to invalidate older pending writes.
   herdr.cli(["pane", "report-metadata", pane.pane_id, "--source", "plugin:" + herdr.ID,
-    "--clear-state-labels",
+    "--clear-state-labels", "--seq", seq,
     ...Object.entries(tokens).flatMap(([k, v]) => v ? ["--token", k + "=" + v] : ["--clear-token", k])]);
 }
 
@@ -59,8 +68,7 @@ function saveNote(terminalId, note) {
   // Native names persist and follow a terminal when its pane moves.
   // Herdr trims names; a leading space keeps a literal '--clear' from being an option.
   herdr.cli(["pane", "rename", pane.pane_id, value ? " " + value : "--clear"]);
-  herdr.cli(["pane", "report-metadata", pane.pane_id, "--source", "plugin:" + herdr.ID,
-    ...(value ? ["--token", "remark_note=" + value] : ["--clear-token", "remark_note"])]);
+  update(pane);
 }
 
 function event() {

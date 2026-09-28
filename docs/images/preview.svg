@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="530" viewBox="0 0 1040 530" role="img" aria-labelledby="title desc">
+  <title id="title">herdr-remark sidebar and note popup</title>
+  <desc id="desc">Illustration of working, blocked, idle unread and idle read lights, two-line agent entries and a note popup that keeps the current pane.</desc>
+  <rect width="1040" height="530" rx="16" fill="#11111b"/>
+  <g font-family="Segoe UI,Arial,sans-serif">
+    <text x="32" y="40" fill="#cdd6f4" font-size="23" font-weight="600">herdr-remark</text>
+    <text x="1008" y="38" text-anchor="end" fill="#a6adc8" font-size="14">LAYOUT PREVIEW · ILLUSTRATION</text>
+    <rect x="24" y="62" width="382" height="360" rx="10" fill="#181825" stroke="#313244"/>
+    <text x="44" y="93" fill="#a6adc8" font-size="13" font-weight="600">AGENTS</text>
+    <g font-family="Consolas,monospace" font-size="17">
+      <circle cx="51" cy="125" r="6" fill="#f9e2af"/>
+      <text x="69" y="131" fill="#f9e2af">api-service<tspan fill="#cdd6f4"> · Build</tspan></text>
+      <text x="69" y="157" fill="#7f849c">main<tspan fill="#cdd6f4"> · Run integration tests</tspan></text>
+      <circle cx="51" cy="200" r="6" fill="#f38ba8"/>
+      <text x="69" y="206" fill="#f38ba8">web-app<tspan fill="#cdd6f4"> · Review</tspan></text>
+      <text x="69" y="232" fill="#7f849c">fix/login<tspan fill="#cdd6f4"> · Await approval</tspan></text>
+      <rect x="34" y="252" width="362" height="69" rx="6" fill="#313244"/>
+      <circle cx="51" cy="276" r="6" fill="#89b4fa"/>
+      <text x="69" y="282" fill="#89b4fa">herdr-remark<tspan fill="#cdd6f4"> · Docs</tspan></text>
+      <text x="69" y="308" fill="#7f849c">main<tspan fill="#cdd6f4"> · Review README</tspan></text>
+      <circle cx="51" cy="351" r="6" fill="none" stroke="#a6e3a1" stroke-width="2"/>
+      <text x="69" y="357" fill="#a6e3a1">cli-tools<tspan fill="#cdd6f4"> · Cleanup</tspan></text>
+      <text x="69" y="383" fill="#7f849c">main</text>
+    </g>
+    <rect x="424" y="62" width="592" height="360" rx="10" fill="#1e1e2e" stroke="#313244"/>
+    <text x="448" y="96" fill="#a6adc8" font-size="14">CURRENT AGENT PANE</text>
+    <g stroke="#313244" stroke-width="8" stroke-linecap="round">
+      <path d="M452 126h262 M452 148h385 M452 170h318 M452 366h293 M452 388h231"/>
+    </g>
+    <rect x="458" y="191" width="526" height="151" rx="7" fill="#11111b" stroke="#89b4fa"/>
+    <text x="477" y="222" fill="#89b4fa" font-size="17">Remark</text>
+    <text x="477" y="254" fill="#bac2de" font-size="15">Enter: save · Empty: clear · Ctrl+C: cancel</text>
+    <text x="477" y="294" fill="#cdd6f4" font-size="18" font-family="Consolas,monospace">&gt; Review README</text>
+    <rect x="651" y="278" width="9" height="20" fill="#bac2de"/>
+    <text x="36" y="456" fill="#cdd6f4" font-size="15">prefix + u   Toggle unread</text>
+    <text x="446" y="456" fill="#cdd6f4" font-size="15">prefix + Shift + u   Edit note without switching panes</text>
+    <g font-size="13">
+      <circle cx="41" cy="492" r="5" fill="#f9e2af"/><text x="55" y="497" fill="#a6adc8">Working</text>
+      <circle cx="189" cy="492" r="5" fill="#f38ba8"/><text x="203" y="497" fill="#a6adc8">Blocked</text>
+      <circle cx="331" cy="492" r="5" fill="#89b4fa"/><text x="345" y="497" fill="#a6adc8">Idle · unread</text>
+      <circle cx="511" cy="492" r="5" fill="none" stroke="#a6e3a1" stroke-width="2"/><text x="525" y="497" fill="#a6adc8">Idle · read</text>
+      <text x="984" y="497" text-anchor="end" fill="#a6adc8">Default prefix: Ctrl+B</text>
+    </g>
+  </g>
+</svg>

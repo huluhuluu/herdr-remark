@@ -49,6 +49,7 @@ function fixture(t, fail = "") {
     if (args[0] === "--version") return bin === "herdr" ? "herdr 0.8.2-custom.1" : "git version 2.45";
     if (command === "config check") assert.ok(fs.readFileSync(env.HERDR_CONFIG_PATH, "utf8").includes("remark_lamp_unread"));
     if (command.startsWith(fail) && fail) throw Error("simulated failure");
+    if (command === "server reload-config") return JSON.stringify({ result: { status: "applied", diagnostics: [] } });
     return "";
   };
   return { dir, target, original, execute, calls };
@@ -101,4 +102,30 @@ test("concurrent config changes are preserved instead of overwritten", t => {
   };
   assert.throws(() => install({ ...f, execute }), /changed during installation/);
   assert.equal(fs.readFileSync(f.target, "utf8"), external);
+});
+
+test("failed reload does not roll back edits made after installation", t => {
+  const f = fixture(t);
+  const external = f.original + '\n[theme]\nname = "nord"\n';
+  const execute = (bin, args, env) => {
+    if (args.join(" ") === "server reload-config") {
+      fs.writeFileSync(f.target, external);
+      throw Error("reload interrupted");
+    }
+    return f.execute(bin, args, env);
+  };
+  assert.throws(() => install({ ...f, execute }), /left it untouched/);
+  assert.equal(fs.readFileSync(f.target, "utf8"), external);
+});
+
+test("reload failure in a successful CLI response is not reported as installed", t => {
+  for (const status of ["failed", "partial"]) {
+    const f = fixture(t);
+    const execute = (bin, args, env) => args.join(" ") === "server reload-config"
+      ? JSON.stringify({ result: { status, diagnostics: ["invalid config"] } })
+      : f.execute(bin, args, env);
+    assert.throws(() => install({ ...f, execute }), /Config reload/);
+    assert.equal(fs.readFileSync(f.target, "utf8"), f.original);
+    assert.equal(f.calls.some(c => c.endsWith("remark.js init")), false);
+  }
 });

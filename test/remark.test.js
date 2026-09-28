@@ -12,8 +12,9 @@ afterEach(() => {
 });
 function fixture(status = "idle") {
   const pane = { pane_id: "w1:p1", terminal_id: "term", workspace_id: "w1", tab_id: "w1:t1",
-    cwd: "C:\\work\\repo", agent: "codex", agent_status: status, state_labels: {}, tokens: {} };
+    cwd: "C:\\work\\repo", agent: "codex", agent_status: status, revision: 1, state_labels: {}, tokens: {} };
   const calls = [];
+  let lastSeq = -1n;
   herdr.branch = () => "main";
   herdr.cli = args => {
     calls.push(args);
@@ -21,11 +22,20 @@ function fixture(status = "idle") {
     if (args[0] === "agent" && args[1] === "list") return { agents: [pane] };
     if (args[1] === "get") return { pane };
     if (args[1] === "focus") pane.agent_status = "idle";
+    if (args[1] === "rename") {
+      pane.label = args[3] === "--clear" ? undefined : args[3].trim();
+    }
+    if (args.includes("--seq")) {
+      const seq = BigInt(args[args.indexOf("--seq") + 1]);
+      if (seq <= lastSeq) return {};
+      lastSeq = seq;
+    }
     for (let i = 0; i < args.length; i++) {
       if (args[i] === "--clear-state-labels") pane.state_labels = {};
       if (args[i] === "--clear-token") delete pane.tokens[args[++i]];
       if (args[i] === "--token") { const [key, ...rest] = args[++i].split("="); pane.tokens[key] = rest.join("="); }
     }
+    if (args[1] === "report-metadata") pane.revision++;
     return {};
   };
   return { pane, calls };
@@ -64,9 +74,9 @@ test("native completion is acknowledged and unused metadata is cleared", () => {
   assert.deepEqual(calls[0], ["agent", "focus", pane.pane_id]);
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
   assert.deepEqual(pane.state_labels, {});
-  const writes = calls.filter(args => args[1] === "report-metadata").length;
+  const tokens = { ...pane.tokens };
   remark.update(pane);
-  assert.equal(calls.filter(args => args[1] === "report-metadata").length, writes);
+  assert.deepEqual(pane.tokens, tokens);
 });
 test("layout metadata is compact and omits an absent branch", () => {
   const { pane } = fixture(); herdr.branch = () => ""; remark.update(pane, false);
@@ -79,17 +89,79 @@ test("layout metadata is compact and omits an absent branch", () => {
 test("note cleaning and terminal identity remain bounded", () => {
   assert.equal(remark.clean("  hello\n\x1b[31m世界\x1b[0m  "), "hello 世界");
   assert.equal(Array.from(remark.clean("😀".repeat(100))).length, 80);
-  herdr.paneForTerminal = id => ({ pane_id: id }); const calls = []; herdr.cli = args => calls.push(args);
-  remark.saveNote("term", "new note"); assert.deepEqual(calls[0], ["pane", "rename", "term", " new note"]);
-  assert.deepEqual(calls[1].slice(-2), ["--token", "remark_note=new note"]);
+  const { pane, calls } = fixture();
+  herdr.paneForTerminal = id => { assert.equal(id, "term"); return pane; };
+  remark.update(pane, true);
+  remark.saveNote("term", "new note");
+  assert.equal(pane.tokens.remark_note, "new note");
+  assert.equal(pane.tokens.remark_unread, "1");
   remark.saveNote("term", "--clear");
-  assert.deepEqual(calls[2], ["pane", "rename", "term", " --clear"]);
+  assert.equal(pane.tokens.remark_note, "--clear");
   remark.saveNote("term", "");
-  assert.deepEqual(calls[4], ["pane", "rename", "term", "--clear"]);
-  assert.deepEqual(calls[5].slice(-2), ["--clear-token", "remark_note"]);
+  assert.equal(pane.tokens.remark_note, undefined);
+  assert.deepEqual(calls.filter(args => args[1] === "rename").map(args => args.slice(2)),
+    [[pane.pane_id, " new note"], [pane.pane_id, " --clear"], [pane.pane_id, "--clear"]]);
+  const count = calls.length;
   herdr.paneForTerminal = () => { throw Error("closed"); };
   assert.throws(() => remark.saveNote("term", "lost"), /closed/);
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, count);
+});
+
+test("slow refresh cannot restore unread or an old note after newer user actions", () => {
+  const { pane } = fixture();
+  pane.label = "Old note";
+  remark.update(pane, true);
+  const snapshot = structuredClone(pane);
+  herdr.branch = () => {
+    delete pane.tokens.remark_unread;
+    pane.label = "New note";
+    pane.revision++;
+    return "main";
+  };
+  remark.update(snapshot);
+  assert.equal(pane.tokens.remark_unread, undefined);
+  assert.equal(pane.tokens.remark_note, "New note");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+});
+
+test("an older in-flight report cannot overwrite a newer note or tab", () => {
+  const { pane } = fixture();
+  remark.update(pane);
+  const cli = herdr.cli;
+  let interleaved = false;
+  herdr.cli = args => {
+    if (args.includes("--seq") && !interleaved) {
+      interleaved = true;
+      pane.label = "Latest note";
+      herdr.cli = next => next[0] === "tab"
+        ? { tabs: [{ tab_id: pane.tab_id, label: "Latest tab" }] } : cli(next);
+      remark.update(pane);
+    }
+    return cli(args);
+  };
+  pane.label = "Older note";
+  remark.update(pane);
+  assert.ok(interleaved);
+  assert.equal(pane.tokens.remark_note, "Latest note");
+  assert.equal(pane.tokens.remark_tab, "Latest tab");
+});
+
+test("a refresh with unchanged display still invalidates an older pending report", () => {
+  const { pane } = fixture();
+  pane.label = "Original note";
+  remark.update(pane);
+  const cli = herdr.cli;
+  herdr.cli = args => {
+    if (args.includes("--seq")) {
+      herdr.cli = cli;
+      pane.label = "Original note";
+      remark.update(pane);
+    }
+    return cli(args);
+  };
+  pane.label = "Temporary note";
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_note, "Original note");
 });
 
 test("directories and note defaults use actual names", () => {
