@@ -22,8 +22,7 @@ function cli(args) {
 
 function target() {
   const context = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON || "{}");
-  const id = process.env.INFORM_TARGET_PANE || context.focused_pane_id ||
-    process.env.HERDR_PANE_ID;
+  const id = context.focused_pane_id || process.env.HERDR_PANE_ID;
   const pane = id ? cli(["pane", "get", id]).pane : cli(["pane", "current"]).pane;
   if (!pane?.agent) throw new Error("请先聚焦一个 Agent。");
   return pane;

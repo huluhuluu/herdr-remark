@@ -1,6 +1,6 @@
 id = "huluhlu.agent-inform"
 name = "Remark"
-version = "0.4.0"
+version = "0.5.0"
 min_herdr_version = "0.8.2"
 description = "Two shortcuts: read/unread and a short agent remark"
 platforms = ["windows", "linux", "macos"]
@@ -41,13 +41,9 @@ on = "pane.agent_status_changed"
 command = ["node", "src/remark.js", "event"]
 
 [[events]]
-on = "tab.renamed"
-command = ["node", "src/remark.js", "event"]
-
-[[events]]
-on = "tab.moved"
-command = ["node", "src/remark.js", "event"]
-
-[[events]]
 on = "pane.moved"
+command = ["node", "src/remark.js", "event"]
+
+[[events]]
+on = "tab.renamed"
 command = ["node", "src/remark.js", "event"]
