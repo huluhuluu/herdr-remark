@@ -35,8 +35,8 @@ test("status lamp combines native state and idle unread", () => {
   for (const [status, unread, lamp, icon] of [
     ["working", false, "working", "●"], ["working", true, "working", "●"],
     ["blocked", false, "blocked", "●"], ["blocked", true, "blocked", "●"],
-    ["idle", false, "idle", "○"], ["idle", true, "unread", "○"],
-    ["done", false, "unread", "○"], ["unknown", true, "unknown", "·"],
+    ["idle", false, "idle", "○"], ["idle", true, "unread", "●"],
+    ["done", false, "unread", "●"], ["unknown", true, "unknown", "·"],
     ["unrecognized", false, "unknown", "·"],
   ]) {
     pane.agent_status = status;
@@ -52,7 +52,7 @@ test("toggle leaves lifecycle state unchanged and focus clears unread", () => {
   process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ pane_id: pane.pane_id });
   pane.agent_status = "idle";
   remark.main("event");
-  assert.equal(pane.tokens.remark_lamp_unread, "○ repo");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
   pane.agent_status = "blocked";
   process.env.HERDR_PLUGIN_EVENT = "pane.focused"; process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { pane_id: pane.pane_id } });
   remark.main("event"); assert.equal(pane.tokens.remark_unread, undefined); assert.equal(pane.tokens.remark_lamp_blocked, "● repo");

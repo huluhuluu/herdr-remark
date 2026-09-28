@@ -2,7 +2,7 @@
 
 const herdr = require("./herdr");
 const path = require("node:path");
-const LAMPS = { working: "●", blocked: "●", idle: "○", unread: "○", unknown: "·" };
+const LAMPS = { working: "●", blocked: "●", idle: "○", unread: "●", unknown: "·" };
 
 function clean(text) {
   return Array.from(String(text || "")

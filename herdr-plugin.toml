@@ -1,6 +1,6 @@
 id = "huluhlu.agent-inform"
 name = "Remark"
-version = "0.5.1"
+version = "0.5.2"
 min_herdr_version = "0.8.2"
 description = "Two shortcuts: read/unread and a short agent remark"
 platforms = ["windows", "linux", "macos"]
