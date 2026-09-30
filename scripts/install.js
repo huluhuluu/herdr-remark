@@ -47,10 +47,10 @@ function run(bin, args, env = {}) {
   return result.stdout;
 }
 
-function install({ target = configPath(), check = false, execute = run } = {}) {
+function install({ target = configPath(), check = false, execute = run, bin = process.env.HERDR_BIN_PATH || "herdr" } = {}) {
   if (Number(process.versions.node.split(".")[0]) < 18) throw Error("Node.js 18+ is required.");
   execute("git", ["--version"]);
-  const version = execute("herdr", ["--version"]).match(/(\d+)\.(\d+)\.(\d+)/);
+  const version = execute(bin, ["--version"]).match(/(\d+)\.(\d+)\.(\d+)/);
   if (!version || (Number(version[1]) === 0 && (Number(version[2]) < 8 ||
       (Number(version[2]) === 8 && Number(version[3]) < 2)))) throw Error("Herdr 0.8.2+ is required.");
   target = fs.existsSync(target) ? fs.realpathSync(target) : path.resolve(target);
@@ -61,10 +61,10 @@ function install({ target = configPath(), check = false, execute = run } = {}) {
   let backup;
   fs.writeFileSync(staged, merged, { flag: "wx", mode: original ? fs.statSync(target).mode & 0o777 : 0o600 });
   try {
-    execute("herdr", ["config", "check"], { HERDR_CONFIG_PATH: staged });
+    execute(bin, ["config", "check"], { HERDR_CONFIG_PATH: staged });
     if (check) return { target, checked: true };
     // Linking needs a running Herdr session. Failure here leaves the config intact.
-    execute("herdr", ["plugin", "link", ROOT]);
+    execute(bin, ["plugin", "link", ROOT]);
     if ((fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null) !== (original?.toString("utf8") ?? null))
       throw Error("Config changed during installation; rerun the installer.");
     const changed = merged !== original?.toString("utf8");
@@ -76,7 +76,7 @@ function install({ target = configPath(), check = false, execute = run } = {}) {
       fs.renameSync(staged, target);
     }
     try {
-      const response = JSON.parse(execute("herdr", ["server", "reload-config"]));
+      const response = JSON.parse(execute(bin, ["server", "reload-config"]));
       if (response.result?.status !== "applied")
         throw Error(`Config reload: ${JSON.stringify(response)}`);
     } catch (error) {

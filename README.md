@@ -84,6 +84,7 @@ For manual installation or a code update, also run `npm run init` from the check
 - Unread marks reset when the Herdr server restarts; notes persist through Herdr.
 - Lights use static Catppuccin colors, without animation or automatic theme matching. Edit `fg` values in the sidebar config to customize them.
 - Git branches refresh on focus and agent events. There is no background polling or native sidebar right-click menu.
+- Herdr exposes no event for pane renames, so a pane renamed outside the shortcut (another tool, or a second client) keeps its old note in the sidebar until the next focus or agent event.
 - Windows has been tested; the Bash installer has been checked under Git Bash, but native Linux has not been tested.
 
 Development: `npm test`; after manifest changes, run `herdr plugin link .` again.

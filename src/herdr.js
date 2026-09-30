@@ -20,8 +20,15 @@ function cli(args) {
   return body?.result || {};
 }
 
+function envJson(name) {
+  const raw = process.env[name];
+  try { return JSON.parse(raw || "{}"); } catch {
+    throw new Error(`${name} 不是合法的 JSON：${String(raw).slice(0, 200)}`);
+  }
+}
+
 function target() {
-  const context = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON || "{}");
+  const context = envJson("HERDR_PLUGIN_CONTEXT_JSON");
   const id = context.focused_pane_id || process.env.HERDR_PANE_ID;
   const pane = id ? cli(["pane", "get", id]).pane : cli(["pane", "current"]).pane;
   if (!pane?.agent) throw new Error("请先聚焦一个 Agent。");
@@ -54,4 +61,4 @@ function openEditor(pane, initial) {
   ]);
 }
 
-module.exports = { ID, cli, target, paneForTerminal, branch, openEditor };
+module.exports = { ID, cli, envJson, target, paneForTerminal, branch, openEditor };

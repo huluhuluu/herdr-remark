@@ -46,7 +46,7 @@ function fixture(t, fail = "") {
   const execute = (bin, args, env) => {
     const command = args.join(" ");
     calls.push(command);
-    if (args[0] === "--version") return bin === "herdr" ? "herdr 0.8.2-custom.1" : "git version 2.45";
+    if (args[0] === "--version") return bin.includes("git") ? "git version 2.45" : "herdr 0.8.2-custom.1";
     if (command === "config check") assert.ok(fs.readFileSync(env.HERDR_CONFIG_PATH, "utf8").includes("remark_lamp_unread"));
     if (command.startsWith(fail) && fail) throw Error("simulated failure");
     if (command === "server reload-config") return JSON.stringify({ result: { status: "applied", diagnostics: [] } });
@@ -54,6 +54,22 @@ function fixture(t, fail = "") {
   };
   return { dir, target, original, execute, calls };
 }
+
+test("the installer uses HERDR_BIN_PATH when herdr is not on PATH", t => {
+  const f = fixture(t);
+  const previous = process.env.HERDR_BIN_PATH;
+  process.env.HERDR_BIN_PATH = "/opt/herdr/bin/herdr";
+  try {
+    const bins = [];
+    const execute = (bin, args, env) => { bins.push(bin); return f.execute(bin, args, env); };
+    install({ ...f, execute });
+    assert.ok(bins.includes("/opt/herdr/bin/herdr"));
+    assert.equal(bins.includes("herdr"), false);
+  } finally {
+    if (previous === undefined) delete process.env.HERDR_BIN_PATH;
+    else process.env.HERDR_BIN_PATH = previous;
+  }
+});
 
 test("check validates without linking or changing the user's config", t => {
   const f = fixture(t);

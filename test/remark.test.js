@@ -88,6 +88,10 @@ test("layout metadata is compact and omits an absent branch", () => {
 });
 test("note cleaning and terminal identity remain bounded", () => {
   assert.equal(remark.clean("  hello\n\x1b[31m世界\x1b[0m  "), "hello 世界");
+  // OSC and non-CSI escapes must not leak their payload as visible text.
+  assert.equal(remark.clean("\x1b]0;window title\x07hello"), "hello");
+  assert.equal(remark.clean("\x1b]0;title\x1b\\hello"), "hello");
+  assert.equal(remark.clean("\x1b(Bascii"), "Bascii");
   assert.equal(Array.from(remark.clean("😀".repeat(100))).length, 80);
   const { pane, calls } = fixture();
   herdr.paneForTerminal = id => { assert.equal(id, "term"); return pane; };
@@ -107,6 +111,16 @@ test("note cleaning and terminal identity remain bounded", () => {
   assert.equal(calls.length, count);
 });
 
+test("malformed environment JSON names the variable instead of leaking a SyntaxError", () => {
+  process.env.HERDR_PLUGIN_EVENT_JSON = "not json";
+  assert.throws(() => herdr.envJson("HERDR_PLUGIN_EVENT_JSON"), /HERDR_PLUGIN_EVENT_JSON 不是合法的 JSON/);
+  assert.throws(() => remark.main("event"), /HERDR_PLUGIN_EVENT_JSON 不是合法的 JSON/);
+  process.env.HERDR_PLUGIN_EVENT_JSON = '{"data":{"pane_id":"w1:p1"}}';
+  assert.deepEqual(herdr.envJson("HERDR_PLUGIN_EVENT_JSON").data, { pane_id: "w1:p1" });
+  delete process.env.HERDR_PLUGIN_EVENT_JSON;
+  assert.deepEqual(herdr.envJson("HERDR_PLUGIN_EVENT_JSON"), {});
+});
+
 test("slow refresh cannot restore unread or an old note after newer user actions", () => {
   const { pane } = fixture();
   pane.label = "Old note";
@@ -122,6 +136,27 @@ test("slow refresh cannot restore unread or an old note after newer user actions
   assert.equal(pane.tokens.remark_unread, undefined);
   assert.equal(pane.tokens.remark_note, "New note");
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+});
+
+test("a stale focus refresh cannot clear unread set after it started", () => {
+  const { pane } = fixture();
+  const cli = herdr.cli;
+  let held = null;
+  herdr.cli = args => {
+    // Hold the stale process's unread write so it lands after the user's toggle.
+    if (args[1] === "report-metadata" && !held &&
+        args[args.indexOf("--clear-token") + 1] === "remark_unread") {
+      held = args;
+      return {};
+    }
+    return cli(args);
+  };
+  remark.update(pane, false);
+  assert.ok(held, "expected the stale refresh to write the unread flag");
+  remark.update(pane, true);
+  assert.equal(pane.tokens.remark_unread, "1");
+  cli(held);
+  assert.equal(pane.tokens.remark_unread, "1");
 });
 
 test("an older in-flight report cannot overwrite a newer note or tab", () => {
@@ -162,6 +197,66 @@ test("a refresh with unchanged display still invalidates an older pending report
   pane.label = "Temporary note";
   remark.update(pane);
   assert.equal(pane.tokens.remark_note, "Original note");
+});
+
+// Minimal metadata applier for the batch tests, which drive several panes.
+function applyMetadata(args, pane) {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--clear-token") delete pane.tokens[args[++i]];
+    if (args[i] === "--token") { const [key, ...rest] = args[++i].split("="); pane.tokens[key] = rest.join("="); }
+  }
+}
+
+test("init fetches each tab label and Git branch once for the whole batch", () => {
+  const panes = [
+    { pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1", cwd: "C:\\work\\repo", agent: "codex", agent_status: "idle", tokens: {} },
+    { pane_id: "w1:p2", tab_id: "w1:t1", workspace_id: "w1", cwd: "C:\\work\\repo", agent: "codex", agent_status: "idle", tokens: {} },
+    { pane_id: "w1:p3", tab_id: "w1:t2", workspace_id: "w1", cwd: "C:\\work\\other", agent: "codex", agent_status: "idle", tokens: {} },
+  ];
+  const calls = [];
+  const branchCwds = [];
+  herdr.branch = cwd => { branchCwds.push(cwd); return "main"; };
+  herdr.cli = args => {
+    calls.push(args.join(" "));
+    if (args[0] === "agent") return { agents: panes };
+    if (args[0] === "tab") return { tabs: [{ tab_id: "w1:t1", label: "Build" }, { tab_id: "w1:t2" }] };
+    if (args[1] === "get") return { pane: panes.find(p => p.pane_id === args[2]) };
+    if (args[1] === "report-metadata") applyMetadata(args, panes.find(p => p.pane_id === args[2]));
+    return {};
+  };
+  remark.main("init");
+  assert.equal(calls.filter(c => c.startsWith("tab list")).length, 1);
+  assert.deepEqual(branchCwds, ["C:\\work\\repo", "C:\\work\\other"]);
+  assert.equal(calls.filter(c => c.startsWith("pane report-metadata")).length, 3);
+  assert.equal(panes[0].tokens.remark_tab, "Build");
+  assert.equal(panes[1].tokens.remark_tab, "Build");
+  // An unlabeled tab clears the token instead of falling back to another lookup.
+  assert.equal(panes[2].tokens.remark_tab, undefined);
+});
+
+test("a tab rename refreshes its agents from the payload without a tab lookup", () => {
+  const pane = { pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1", cwd: "C:\\work\\repo",
+    agent: "codex", agent_status: "idle", tokens: { remark_tab: "Old" } };
+  const calls = [];
+  herdr.branch = () => "main";
+  herdr.cli = args => {
+    calls.push(args.join(" "));
+    if (args[0] === "agent") return { agents: [pane, { ...pane, pane_id: "w1:p9", tab_id: "w1:t9", tokens: {} }] };
+    if (args[1] === "get") return { pane };
+    if (args[1] === "report-metadata") applyMetadata(args, pane);
+    return {};
+  };
+  process.env.HERDR_PLUGIN_EVENT = "tab.renamed";
+  process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: "w1:t1", label: "Renamed" } });
+  remark.main("event");
+  assert.equal(pane.tokens.remark_tab, "Renamed");
+  assert.equal(calls.some(c => c.startsWith("tab list")), false);
+  assert.equal(calls.filter(c => c.startsWith("pane get")).length, 1);
+
+  // A payload without a label field still resolves it, once for the batch.
+  process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: "w1:t1" } });
+  remark.main("event");
+  assert.equal(calls.filter(c => c.startsWith("tab list")).length, 1);
 });
 
 test("directories and note defaults use actual names", () => {

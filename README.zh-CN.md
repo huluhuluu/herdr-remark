@@ -84,6 +84,7 @@ herdr server reload-config
 - Herdr 服务器重启后未读标记重置，备注由 Herdr 持久保存。
 - 状态灯使用静态 Catppuccin 配色，不包含动画，也不自动跟随主题；可修改侧边栏配置中的 `fg`。
 - Git 分支在聚焦、Agent 事件发生时刷新；无后台轮询，不提供原生侧边栏右键菜单。
+- Herdr 未提供 pane 重命名事件，因此在快捷键之外改名（其他工具或第二个客户端）后，侧边栏会保留旧备注，直到下一次聚焦或 Agent 事件。
 - 已在 Windows 验证；Bash 安装脚本已通过 Git Bash 检查，尚未在原生 Linux 验证。
 
 开发测试：`npm test`；修改 manifest 后重新运行 `herdr plugin link .`。

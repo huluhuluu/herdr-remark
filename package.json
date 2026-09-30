@@ -4,6 +4,21 @@
   "private": true,
   "description": "Two shortcuts for agent read/unread and remarks",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huluhuluu/herdr-remark.git"
+  },
+  "homepage": "https://github.com/huluhuluu/herdr-remark#readme",
+  "bugs": {
+    "url": "https://github.com/huluhuluu/herdr-remark/issues"
+  },
+  "keywords": [
+    "herdr",
+    "herdr-plugin",
+    "terminal",
+    "agent",
+    "read-unread"
+  ],
   "engines": {
     "node": ">=18"
   },
