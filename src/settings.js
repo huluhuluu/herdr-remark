@@ -7,7 +7,7 @@ const path = require("node:path");
 // working lamp can be switched off or slowed down without editing Herdr's own
 // config.toml. A missing or malformed file falls back to these defaults rather
 // than failing a hook: the sidebar must keep working either way.
-const DEFAULTS = { blink: true, blinkIntervalMs: 800 };
+const DEFAULTS = { blink: true, blinkIntervalMs: 800, wheelRead: true };
 const MIN_INTERVAL_MS = 100;
 const MAX_INTERVAL_MS = 60000;
 
@@ -25,6 +25,7 @@ function load(env = process.env) {
   const asked = Number(raw.blink_interval_ms);
   return {
     blink: raw.blink !== false,
+    wheelRead: raw.wheel_read !== false,
     blinkIntervalMs: Number.isFinite(asked) && asked > 0
       ? Math.min(Math.max(asked, MIN_INTERVAL_MS), MAX_INTERVAL_MS)
       : DEFAULTS.blinkIntervalMs,

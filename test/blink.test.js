@@ -1,5 +1,5 @@
 "use strict";
-const { test, afterEach, after } = require("node:test");
+const { test, beforeEach, afterEach, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -7,6 +7,8 @@ const path = require("node:path");
 const blink = require("../src/blink");
 const settings = require("../src/settings");
 const socket = require("../src/socket");
+const wheel = require("../src/wheel");
+beforeEach(() => { wheel.start = () => ({ close() {} }); });
 const { clean, directory } = require("../src/text");
 const herdr = require("../src/herdr");
 const remark = require("../src/remark");
@@ -44,11 +46,11 @@ test("directory understands both Windows and POSIX paths", () => {
 
 test("blink defaults to on at 800ms and survives a broken config file", () => {
   const e = env();
-  assert.deepEqual(settings.load(e), { blink: true, blinkIntervalMs: 800 });
+  assert.deepEqual(settings.load(e), { blink: true, blinkIntervalMs: 800, wheelRead: true });
   fs.writeFileSync(settings.filePath(e), "{ not json");
-  assert.deepEqual(settings.load(e), { blink: true, blinkIntervalMs: 800 });
+  assert.deepEqual(settings.load(e), { blink: true, blinkIntervalMs: 800, wheelRead: true });
   fs.writeFileSync(settings.filePath(e), JSON.stringify({ blink: false, blink_interval_ms: 250 }));
-  assert.deepEqual(settings.load(e), { blink: false, blinkIntervalMs: 250 });
+  assert.deepEqual(settings.load(e), { blink: false, blinkIntervalMs: 250, wheelRead: true });
 });
 
 test("an out-of-range interval is clamped rather than accepted", () => {
@@ -324,6 +326,58 @@ test("a delayed scroll event does not acknowledge a newer completion", async () 
   };
   remark.update = () => assert.fail("a newer turn must not be acknowledged");
   await blink.acknowledge(watched, herdr.sequence(), env());
+});
+
+test("a newer completion_seq is checked again immediately before acknowledgement", async () => {
+  const watched = { pane_id: "p1", terminal_id: "term1", agent_status: "done", state_change_seq: 10, completion_seq: 8 };
+  socket.request = async method => {
+    assert.equal(method, "agent.list");
+    return { agents: [{ ...watched, completion_seq: 9 }] };
+  };
+  remark.update = () => assert.fail("must preserve the newer completion");
+  await blink.acknowledge(watched, herdr.sequence(), env());
+});
+
+test("wheel input shares the read queue and its helper stops when unread clears", async () => {
+  settings.load = () => ({ blink: false, blinkIntervalMs: 1, wheelRead: true });
+  const e = env();
+  const agent = { pane_id: "p1", terminal_id: "term1", agent_status: "idle", state_change_seq: 1,
+    tokens: { remark_unread: "100" } };
+  let starts = 0, closes = 0, writes = 0, refreshes = 0;
+  wheel.start = (getWatched, read) => {
+    starts++;
+    const snapshot = getWatched().get("p1");
+    read(snapshot, herdr.sequence());
+    read(snapshot, herdr.sequence());
+    return { close() { closes++; } };
+  };
+  socket.request = async (method, params) => {
+    if (method === "agent.list") return { agents: [structuredClone(agent)] };
+    if (method === "pane.list") return { panes: [] };
+    assert.equal(params.source, READ_SOURCE);
+    writes++;
+    agent.tokens = {};
+    return {};
+  };
+  socket.subscribe = () => ({ closed: false, ready: Promise.resolve(), close() {} });
+  remark.update = () => { refreshes++; };
+  await blink.run(e);
+  assert.deepEqual({ starts, closes, writes, refreshes }, { starts: 1, closes: 1, writes: 1, refreshes: 1 });
+});
+
+test("wheel_read false leaves the public scroll subscription available without a native helper", async () => {
+  const e = env();
+  fs.writeFileSync(settings.filePath(e), JSON.stringify({ wheel_read: false }));
+  assert.equal(settings.load(e).wheelRead, false);
+  settings.load = () => ({ blink: false, blinkIntervalMs: 1, wheelRead: false });
+  let subscriptions = 0;
+  wheel.start = () => assert.fail("disabled native helper must not start");
+  socket.request = async method => method === "agent.list" ? { agents: subscriptions ? [] : [
+    { pane_id: "p1", agent_status: "idle", tokens: { remark_unread: "1" } },
+  ] } : { panes: [] };
+  socket.subscribe = () => { subscriptions++; return { closed: false, ready: Promise.resolve(), close() {} }; };
+  await blink.run(e);
+  assert.equal(subscriptions, 1);
 });
 
 test("a queued acknowledgement cannot clear a newer manual mark in the same round", async () => {

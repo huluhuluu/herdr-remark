@@ -44,7 +44,9 @@ bash scripts/install.sh
 
 **完成回合：** 每个观察到的完成回合都先显示蓝色，包括当前 Tab。接口提供 `completion_seq` 时，使用它区分完成回合与原生已查看状态；旧版通过已观察到的工作／阻塞 → 空闲转换识别。插件未运行期间遗漏的完成，不能仅凭空闲快照补回。标为已读不再调用原生 `agent focus`，不改变其他 Agent 的执行状态。
 
-**滚动范围：** 当前订阅的是 Herdr 终端回滚事件。Herdr 0.9.1 中，全屏 Agent 内部翻阅可能直接接收滚轮输入，终端回滚偏移保持为 0；这类滚动尚未识别。正在验证外部输入 hook，插件不要求修改 Herdr。
+**滚动范围：** 各平台仍通过 Herdr 公开事件识别终端回滚。Windows Terminal 另接入实验性的只读滚轮监听，用于终端偏移保持为 0 的全屏应用。它从实时会话快照取得实际聚焦 pane，通过 Windows UI Automation 核对可见内容和字符尺寸，仅确认匹配 pane 内容区内的滚轮操作。不拦截或改写输入，不修改 Herdr，也不依赖特定 Agent 的 hook。
+
+监听仅在存在未读 pane 时启动，随原有监控退出。可见文本只经本地管道在内存中比对，不保存、不记录日志。后台／锁屏窗口、内容匹配失败或文字不足时保留未读；滚到边界后继续使用滚轮仍算查看。内容匹配不是 Herdr 原生客户端身份标识，不同会话显示完全相同内容时，无法可靠区分。**macOS、Linux 和其他 Windows 终端目前仍仅识别公开终端回滚事件。** Windows 已验证输入采集、内容区定位及辅助进程生命周期，真实滚轮到绿灯的完整操作验证仍待进行。
 
 **事件边界：** Herdr 的聚焦／改名事件没有原始序号，也不区分用户或插件来源。目标已不再聚焦、或 Tab 名称已被后续改名替换的旧事件只刷新信息；仍符合当前状态的迟到事件，暂时无法完全区分。自动改名插件触发的 Tab 改名与手动改名一样会清除未读。
 
@@ -64,6 +66,7 @@ bash scripts/install.sh
           ├─ 未读快捷键
           ├─ 离开后重新聚焦
           ├─ 终端回滚位置实际变化
+          ├─ Windows Terminal 内容区滚轮（匹配成功）
           ├─ 保存／清空备注：当前 Agent
           └─ Tab 改名：该 Tab 下全部 Agent
 
@@ -79,10 +82,10 @@ bash scripts/install.sh
 如需关闭或调整频率，在本插件的配置目录（`herdr plugin list` 会打印路径，通常为 `%APPDATA%\herdr\plugins\config\huluhlu.agent-inform`）新建 `config.json`：
 
 ```json
-{ "blink": false, "blink_interval_ms": 400 }
+{ "blink": false, "blink_interval_ms": 400, "wheel_read": true }
 ```
 
-两个键都可选。`blink_interval_ms` 会被限制在 100–60000 之间，默认 800。监控运行时，修改会在下一轮生效；监控已退出时执行 `npm run init`。闪烁依赖侧栏 rows 中的暗色 `$remark_lamp_working_blink` token，缺失时请重新执行安装脚本。
+所有键均可选。`wheel_read` 默认开启；设为 false 只关闭 Windows 滚轮监听，保留公开终端回滚识别。`blink_interval_ms` 会被限制在 100–60000 之间，默认 800。监控运行时，修改会在下一轮生效；监控已退出或原生辅助进程失败时执行 `npm run init`。闪烁依赖侧栏 rows 中的暗色 `$remark_lamp_working_blink` token，缺失时请重新执行安装脚本。
 
 **备注：** 依次使用已有 pane 名称 → Agent 摘要 → 会话标题作为初始内容。`Enter` 保存，清空后按 `Enter` 删除，`Ctrl+C` 取消。最多 80 个 Unicode 字符，保存为原生 pane 名称，会替换已有自定义名称。
 
@@ -115,14 +118,14 @@ herdr server reload-config
 
 ## 说明
 
-- 正常刷新只写入 Remark 元数据；插件不扫描系统进程，也不清除 Agent authority。
+- 正常刷新只写入 Remark 元数据，不清除 Agent authority。可选 Windows 滚轮监听会枚举 Windows Terminal 进程以筛选鼠标输入。
 - Herdr 服务器重启后未读标记重置，备注由 Herdr 持久保存。
 - 状态灯使用静态 Catppuccin 配色，不自动跟随主题；可修改侧边栏配置中的 `fg`。
 - 每次状态刷新都重新核对目录、Tab 名和 Git 分支；Tab 改名会刷新该 Tab 下的所有 Agent。闪烁间隔只更新灯，滚动事件通过 socket 订阅，不提供原生侧边栏右键菜单。
 - Herdr 未提供 pane 重命名事件，因此在快捷键之外改名（其他工具或第二个客户端）后，侧边栏会保留旧备注，直到下一次聚焦或 Agent 事件。
 - 已在 Windows 验证；Bash 安装脚本已通过 Git Bash 检查，尚未在原生 Linux 验证。
 
-**滚轮实验（仅 Windows Terminal）：** 执行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`，输出终端几何信息、当前 Herdr 布局及 Windows Terminal 窗口中的滚轮坐标。不读取对话文本、不改变输入或已读状态、不写日志，退出时卸载监听，最长运行 60 秒。插件不会自动加载此脚本。成功注册监听不代表已经定位到正确的 Herdr 会话／pane；宿主窗口绑定、侧边栏／弹窗偏移和 macOS 尚未验证。
+**只读滚轮探针（仅 Windows Terminal）：** 执行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`，复用正式辅助进程，输出前台 Windows Terminal 窗口中的滚轮坐标，连续事件会合并。探针模式不读取对话文本、不改变输入或已读状态、不写日志，退出时卸载监听，最长运行 60 秒。探针本身不验证 pane 匹配。
 
 开发测试：`npm test`；修改 manifest 后重新运行 `herdr plugin link .`。
 

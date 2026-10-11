@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2
+
+- Add an experimental passive Windows Terminal wheel listener to the existing unread monitor. Match actual focused-pane content and geometry using public Herdr APIs and Windows UI Automation; keep public scrollback detection on other hosts/platforms.
+- Start the helper only while unread panes exist, coalesce input, validate the observed round before acknowledging, and remove the hook on exit. No Agent wrappers, Herdr patches, dependencies, saved screen text or new environments.
+- Add `wheel_read: false` to disable native listening independently of terminal scrollback and animation. Reuse the same helper in the bounded read-only probe.
+- Validate 96 tests on Windows, including native helper startup/UTF-8/EOF cleanup; verify content-area coordinates match and sidebar coordinates do not. Physical wheel-to-green validation and native macOS fullscreen listening remain outstanding.
+
 ## 0.6.1
 
 - Keep observed active-tab completions unread even when Herdr reports `idle`. Use `completion_seq` when available; otherwise remember observed working/blocked transitions in one plugin token.

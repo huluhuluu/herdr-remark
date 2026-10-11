@@ -44,7 +44,9 @@ Focus the target agent first. The default `prefix` is `Ctrl+B`: press and releas
 
 **Completion tracking:** every observed completion starts blue, including in the active Tab. When available, Herdr's `completion_seq` identifies the completed round independently of its native seen state. Older versions use observed working/blocked → idle transitions; an idle snapshot alone cannot recover work completed while the plugin was absent. Acknowledging a round never calls native `agent focus` or changes another agent's lifecycle.
 
-**Scroll scope:** the plugin subscribes to Herdr terminal scrollback events. In Herdr 0.9.1, a fullscreen agent can receive wheel input directly while the terminal scrollback offset stays at zero. Such internal scrolling is not yet detected. An external input hook is under investigation; the plugin does not require a patched Herdr.
+**Scroll scope:** terminal scrollback uses Herdr's public events on all supported platforms. Windows Terminal additionally has an experimental passive wheel listener for fullscreen applications whose scrollback offset stays at zero. It resolves the actual focused pane from a session snapshot, matches visible lines and cell geometry through Windows UI Automation, and acknowledges only wheel input inside the matched pane. It observes input without consuming or rewriting it, does not patch Herdr, and needs no Agent-specific integration.
+
+The listener starts only while there are unread panes and stops with the existing monitor. Visible text is compared in memory through local pipes; it is not logged or saved. Background/locked windows, unmatched content and insufficient text remain unread. Wheel input at a scroll boundary still counts as viewing. The matching is evidence from screen content, not a native Herdr client identity; identical content in different sessions cannot be distinguished reliably. **macOS, Linux and other Windows terminals currently retain public scrollback detection only.** Windows input capture, content-area matching and helper lifecycle have been checked; a physical wheel → green-light check is still pending.
 
 **Event limits:** Herdr's focus/rename events carry neither an original sequence nor a user/plugin origin. Hooks for a pane that is no longer focused or a superseded Tab name only refresh metadata. A late event that still matches current state cannot always be distinguished from a new interaction. Automatic Tab renames also acknowledge unread, just like manual ones.
 
@@ -61,10 +63,10 @@ Focus the target agent first. The default `prefix` is `Ctrl+B`: press and releas
 To turn it off or change the speed, create `config.json` in this plugin's config directory (`herdr plugin list` prints the path, usually `%APPDATA%\herdr\plugins\config\huluhlu.agent-inform`):
 
 ```json
-{ "blink": false, "blink_interval_ms": 400 }
+{ "blink": false, "blink_interval_ms": 400, "wheel_read": true }
 ```
 
-Both keys are optional. `blink_interval_ms` is clamped to 100–60000 and defaults to 800. A running monitor applies changes on its next cycle; run `npm run init` if the monitor has already exited. The pulse needs the dimmed `$remark_lamp_working_blink` token in your sidebar rows — rerun the installer if it is missing.
+All keys are optional. `wheel_read` defaults to true; false disables the Windows listener while retaining public scrollback detection. `blink_interval_ms` is clamped to 100–60000 and defaults to 800. A running monitor applies changes on its next cycle; run `npm run init` if the monitor has already exited or a native helper failed. The pulse needs the dimmed `$remark_lamp_working_blink` token in your sidebar rows — rerun the installer if it is missing.
 
 **Notes:** prefill the existing pane name → agent summary → conversation title. `Enter` saves, empty input + `Enter` clears, and `Ctrl+C` cancels. Notes are limited to 80 Unicode characters and saved as native pane names, replacing any existing custom name.
 
@@ -97,14 +99,14 @@ After manual installation or a code update, run `herdr plugin link .`, then `npm
 
 ## Notes
 
-- Normal refreshes only write Remark metadata; the plugin does not scan processes or clear agent authority.
+- Normal refreshes only write Remark metadata and never clear agent authority. The optional Windows listener enumerates Windows Terminal processes to filter mouse input.
 - Unread marks reset when the Herdr server restarts; notes persist through Herdr.
 - Lights use static Catppuccin colors, matching no theme automatically. Edit `fg` values in the sidebar config to customize them.
 - Every status refresh resolves the current directory, Tab name and Git branch. Renaming a Tab refreshes all its agents. Animation ticks only update lamps; scroll events use a socket subscription. There is no native sidebar right-click menu.
 - Herdr exposes no event for pane renames, so a pane renamed outside the shortcut (another tool, or a second client) keeps its old note in the sidebar until the next focus or agent event.
 - Windows has been tested; the Bash installer has been checked under Git Bash, but native Linux has not been tested.
 
-**Experimental wheel probe (Windows Terminal only):** run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`. It prints terminal geometry, the current Herdr layout and wheel coordinates for Windows Terminal windows. It reads no conversation text, changes no input or unread state, writes no logs, and removes its hook on exit (maximum 60 seconds). It is not loaded by the plugin. A successful hook does not establish which Herdr session/pane received a wheel event: host window binding, sidebar/popup offsets and macOS remain unverified.
+**Read-only wheel probe (Windows Terminal only):** run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`. It uses the same native helper and prints foreground Windows Terminal wheel coordinates, coalescing bursts. Probe mode reads no conversation text, changes no input or unread state, writes no logs, and removes its hook on exit (maximum 60 seconds). The probe alone does not verify pane matching.
 
 Development: `npm test`; after manifest changes, run `herdr plugin link .` again.
 

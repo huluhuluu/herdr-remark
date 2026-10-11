@@ -7,6 +7,7 @@ const { spawn } = require("node:child_process");
 const herdr = require("./herdr");
 const settings = require("./settings");
 const socket = require("./socket");
+const wheel = require("./wheel");
 const { LAMP_SOURCE, READ_SOURCE, stateOf, lampTokens, readTokens } = require("./tokens");
 
 // Herdr token styles are static: fg, bold and dim are fixed per token in
@@ -98,6 +99,7 @@ async function acknowledge(watched, seq, env = process.env) {
   const live = (await socket.request("agent.list", {}, options)).agents?.find(agent =>
     agent.pane_id === watched.pane_id && agent.terminal_id === watched.terminal_id &&
     agent.state_change_seq === watched.state_change_seq &&
+    agent.completion_seq === watched.completion_seq &&
     agent.tokens?.remark_unread === watched.tokens?.remark_unread);
   if (!live) return;
   await socket.request("pane.report_metadata", {
@@ -128,6 +130,7 @@ async function run(env = process.env) {
   let watched = new Map();
   const positions = new Map();
   let subscription;
+  let wheelMonitor;
   let reload = false;
   let pending = Promise.resolve();
   const reading = new Set();
@@ -178,6 +181,12 @@ async function run(env = process.env) {
         .map(agent => [agent.pane_id, agent]));
       const changed = unread.size !== watched.size || [...unread.keys()].some(id => !watched.has(id));
       watched = unread;
+      if (watched.size && config.wheelRead !== false && !wheelMonitor)
+        wheelMonitor = wheel.start(() => watched, queueRead, error => record(error, env), env);
+      if ((!watched.size || config.wheelRead === false) && wheelMonitor) {
+        wheelMonitor.close();
+        wheelMonitor = undefined;
+      }
       if (changed || (watched.size && (!subscription || subscription.closed))) {
         subscription?.close();
         subscription = undefined;
@@ -221,6 +230,7 @@ async function run(env = process.env) {
   } catch (error) {
     record(error, env);
   } finally {
+    wheelMonitor?.close();
     subscription?.close();
     await pending;
     // Never restore a lamp from a stale working snapshot, even after an error.
