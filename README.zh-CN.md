@@ -122,6 +122,8 @@ herdr server reload-config
 - Herdr 未提供 pane 重命名事件，因此在快捷键之外改名（其他工具或第二个客户端）后，侧边栏会保留旧备注，直到下一次聚焦或 Agent 事件。
 - 已在 Windows 验证；Bash 安装脚本已通过 Git Bash 检查，尚未在原生 Linux 验证。
 
+**滚轮实验（仅 Windows Terminal）：** 执行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`，输出终端几何信息、当前 Herdr 布局及 Windows Terminal 窗口中的滚轮坐标。不读取对话文本、不改变输入或已读状态、不写日志，退出时卸载监听，最长运行 60 秒。插件不会自动加载此脚本。成功注册监听不代表已经定位到正确的 Herdr 会话／pane；宿主窗口绑定、侧边栏／弹窗偏移和 macOS 尚未验证。
+
 开发测试：`npm test`；修改 manifest 后重新运行 `herdr plugin link .`。
 
 [更新记录](CHANGELOG.md) · [问题反馈](https://github.com/huluhuluu/herdr-remark/issues) · [MIT 许可证](LICENSE)

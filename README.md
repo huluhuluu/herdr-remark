@@ -104,6 +104,8 @@ After manual installation or a code update, run `herdr plugin link .`, then `npm
 - Herdr exposes no event for pane renames, so a pane renamed outside the shortcut (another tool, or a second client) keeps its old note in the sidebar until the next focus or agent event.
 - Windows has been tested; the Bash installer has been checked under Git Bash, but native Linux has not been tested.
 
+**Experimental wheel probe (Windows Terminal only):** run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`. It prints terminal geometry, the current Herdr layout and wheel coordinates for Windows Terminal windows. It reads no conversation text, changes no input or unread state, writes no logs, and removes its hook on exit (maximum 60 seconds). It is not loaded by the plugin. A successful hook does not establish which Herdr session/pane received a wheel event: host window binding, sidebar/popup offsets and macOS remain unverified.
+
 Development: `npm test`; after manifest changes, run `herdr plugin link .` again.
 
 [Changelog](CHANGELOG.md) · [Issues](https://github.com/huluhuluu/herdr-remark/issues) · [MIT License](LICENSE)

@@ -7,6 +7,7 @@
 - Give manual unread marks distinct generations so a queued scroll acknowledgement cannot clear a newer mark in the same task.
 - Ignore acknowledgements from focus hooks whose pane is no longer focused and rename hooks whose label no longer matches the Tab.
 - Document the remaining event-order, automatic-rename and fullscreen-scrolling limitations. No Herdr patches, new dependencies or Agent wrappers.
+- Add an opt-in, bounded Windows Terminal wheel probe for read-only input/geometry experiments. It never changes read state and is not part of plugin startup.
 
 ## 0.6.0
 
