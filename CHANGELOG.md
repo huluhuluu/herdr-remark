@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.1
+
+- Keep observed active-tab completions unread even when Herdr reports `idle`. Use `completion_seq` when available; otherwise remember observed working/blocked transitions in one plugin token.
+- Acknowledge a completion without calling `agent focus`, switching modes or acknowledging other agents in the Tab.
+- Give manual unread marks distinct generations so a queued scroll acknowledgement cannot clear a newer mark in the same task.
+- Ignore acknowledgements from focus hooks whose pane is no longer focused and rename hooks whose label no longer matches the Tab.
+- Document the remaining event-order, automatic-rename and fullscreen-scrolling limitations. No Herdr patches, new dependencies or Agent wrappers.
+
 ## 0.6.0
 
 - Saving a note acknowledges its agent; renaming a Tab acknowledges all agents in that Tab without changing their lifecycle status.

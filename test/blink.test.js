@@ -326,6 +326,17 @@ test("a delayed scroll event does not acknowledge a newer completion", async () 
   await blink.acknowledge(watched, herdr.sequence(), env());
 });
 
+test("a queued acknowledgement cannot clear a newer manual mark in the same round", async () => {
+  const watched = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "idle",
+    state_change_seq: 1, tokens: { remark_unread: "100" } };
+  socket.request = async method => {
+    assert.equal(method, "agent.list");
+    return { agents: [{ ...watched, tokens: { remark_unread: "200" } }] };
+  };
+  remark.update = () => assert.fail("the newer manual mark must remain unread");
+  await blink.acknowledge(watched, herdr.sequence(), env());
+});
+
 test("the first scroll after a state transition uses a fresh generation", async () => {
   settings.load = () => ({ blink: false, blinkIntervalMs: 1 });
   const e = env();

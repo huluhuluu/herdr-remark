@@ -97,7 +97,8 @@ async function acknowledge(watched, seq, env = process.env) {
   const options = { socketPath: env.HERDR_SOCKET_PATH };
   const live = (await socket.request("agent.list", {}, options)).agents?.find(agent =>
     agent.pane_id === watched.pane_id && agent.terminal_id === watched.terminal_id &&
-    agent.state_change_seq === watched.state_change_seq);
+    agent.state_change_seq === watched.state_change_seq &&
+    agent.tokens?.remark_unread === watched.tokens?.remark_unread);
   if (!live) return;
   await socket.request("pane.report_metadata", {
     pane_id: live.pane_id, source: READ_SOURCE, seq, tokens: readTokens(live, false),

@@ -19,7 +19,7 @@ afterEach(() => {
 });
 function fixture(status = "idle") {
   const pane = { pane_id: "w1:p1", terminal_id: "term", workspace_id: "w1", tab_id: "w1:t1",
-    cwd: "C:\\work\\repo", agent: "codex", agent_status: status, revision: 1, state_labels: {}, tokens: {} };
+    cwd: "C:\\work\\repo", agent: "codex", agent_status: status, focused: true, revision: 1, state_labels: {}, tokens: {} };
   const calls = [];
   const lastSeq = new Map();
   herdr.branch = () => "main";
@@ -77,9 +77,11 @@ test("toggle leaves lifecycle state unchanged and focus clears unread", () => {
 });
 test("native completion is acknowledged without changing state labels", () => {
   const { pane, calls } = fixture("done");
+  pane.state_change_seq = 1;
   pane.state_labels = { idle: "custom label" };
   assert.equal(remark.toggle(pane), false);
-  assert.ok(calls.some(args => args.join(" ") === "agent focus " + pane.pane_id));
+  assert.ok(calls.every(args => args[1] !== "focus"));
+  assert.equal(pane.agent_status, "done");
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
   assert.deepEqual(pane.state_labels, { idle: "custom label" });
   assert.ok(calls.every(args => !args.includes("--clear-state-labels")));
@@ -107,7 +109,7 @@ test("note and Tab renames acknowledge unread without changing the agent lifecyc
         remark.saveNote("term", "updated note");
       } else {
         process.env.HERDR_PLUGIN_EVENT = "tab.renamed";
-        process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: pane.tab_id } });
+        process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: pane.tab_id, label: "Build" } });
         remark.main("event");
       }
       assert.equal(pane.agent_status, status);
@@ -201,9 +203,10 @@ test("a stale focus refresh cannot clear unread set after it started", () => {
   remark.update(pane, false);
   assert.ok(held, "expected the stale refresh to write the unread flag");
   remark.update(pane, true);
-  assert.equal(pane.tokens.remark_unread, "1");
+  const mark = pane.tokens.remark_unread;
+  assert.ok(mark);
   cli(held);
-  assert.equal(pane.tokens.remark_unread, "1");
+  assert.equal(pane.tokens.remark_unread, mark);
 });
 
 test("an older in-flight report cannot overwrite a newer note or tab", () => {
@@ -298,16 +301,95 @@ test("a Tab rename refreshes its agents from current state, not an old event lab
   process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: "w1:t1", label: "Renamed" } });
   remark.main("event");
   assert.equal(pane.tokens.remark_tab, "Current");
-  assert.equal(pane.tokens.remark_unread, undefined);
-  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  assert.equal(pane.tokens.remark_unread, "1");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
   assert.equal(calls.some(c => c.startsWith("pane report-metadata w1:p9 ")), false);
-  assert.equal(calls.filter(c => c.startsWith("tab list")).length, 1);
-  assert.equal(calls.filter(c => c.startsWith("pane get")).length, 2);
+  assert.equal(calls.filter(c => c.startsWith("pane get")).length, 1);
 
   // A payload without a label field still resolves it, once for the batch.
   process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: "w1:t1" } });
   remark.main("event");
-  assert.equal(calls.filter(c => c.startsWith("tab list")).length, 2);
+  assert.equal(pane.tokens.remark_unread, "1");
+});
+
+test("a late focus hook for a pane that is no longer focused only refreshes metadata", () => {
+  const { pane } = fixture();
+  pane.focused = false;
+  remark.update(pane, true);
+  const mark = pane.tokens.remark_unread;
+  process.env.HERDR_PLUGIN_EVENT = "pane.focused";
+  process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { pane_id: pane.pane_id } });
+  remark.main("event");
+  assert.equal(pane.tokens.remark_unread, mark);
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});
+
+test("active-tab idle completions turn blue for each observed round on older Herdr", () => {
+  for (const agent of ["codex", "dst", "claude"]) {
+    const { pane } = fixture("working");
+    pane.agent = agent;
+    pane.state_change_seq = 10;
+    remark.update(pane);
+    pane.agent_status = "idle";
+    pane.state_change_seq = 11;
+    remark.update(pane);
+    assert.equal(pane.tokens.remark_lamp_unread, "● repo", agent);
+    remark.update(pane); // Staying in the current Tab does not acknowledge it.
+    assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+    remark.toggle(pane);
+    assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+    pane.agent_status = "blocked";
+    pane.state_change_seq = 12;
+    remark.update(pane);
+    assert.equal(pane.tokens.remark_lamp_blocked, "● repo");
+    pane.agent_status = "idle";
+    pane.state_change_seq = 13;
+    remark.update(pane);
+    assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+  }
+});
+
+test("native completion_seq is independent of native seen state and state_change_seq", () => {
+  const { pane, calls } = fixture("idle");
+  pane.state_change_seq = 50;
+  pane.completion_seq = 40;
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+  remark.toggle(pane);
+  assert.equal(pane.tokens.remark_seen, "40");
+  pane.state_change_seq = 51;
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  pane.completion_seq = 52;
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+  assert.ok(calls.every(args => args[1] !== "focus"));
+});
+
+test("idle alone and a replaced terminal do not invent a completion", () => {
+  const { pane } = fixture();
+  pane.state_change_seq = 1;
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  pane.agent_status = "working";
+  pane.state_change_seq = 2;
+  remark.update(pane);
+  pane.terminal_id = "replacement";
+  pane.agent_status = "idle";
+  pane.state_change_seq = 3;
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+});
+
+test("viewing during work does not acknowledge the completion that follows", () => {
+  const { pane } = fixture("working");
+  pane.state_change_seq = 10;
+  remark.update(pane, false);
+  assert.equal(pane.tokens.remark_seen, undefined);
+  pane.agent_status = "idle";
+  pane.state_change_seq = 11;
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
 });
 
 test("directories and note defaults use actual names", () => {
@@ -466,11 +548,12 @@ test("reload waits for Herdr's plugin command and propagates its failure", async
 
 test("toggle renders the accepted unread state after acknowledging completion", () => {
   const { pane, calls } = fixture("done");
+  pane.state_change_seq = 1;
   assert.equal(remark.toggle(pane), false);
-  assert.ok(calls.some(args => args.join(" ") === "agent focus " + pane.pane_id));
+  assert.ok(calls.every(args => args[1] !== "focus"));
   // Read the action target and then the accepted state after writing the flag.
   assert.equal(calls.filter(args => args[1] === "get").length, 3);
-  assert.equal(pane.agent_status, "idle");
+  assert.equal(pane.agent_status, "done");
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
 });
 
@@ -479,14 +562,14 @@ test("a background refresh cannot invalidate a delayed manual unread write", () 
   const cli = herdr.cli;
   let interleaved = false;
   herdr.cli = args => {
-    if (!interleaved && args.includes("remark_unread=1")) {
+    if (!interleaved && args.some(arg => arg.startsWith("remark_unread="))) {
       interleaved = true;
       remark.update(structuredClone(pane));
     }
     return cli(args);
   };
   assert.equal(remark.toggle(structuredClone(pane)), true);
-  assert.equal(pane.tokens.remark_unread, "1");
+  assert.ok(pane.tokens.remark_unread);
   assert.equal(pane.tokens.remark_lamp_unread, "● repo");
   assert.ok(calls.some(args => args.includes(READ_SOURCE)));
 });

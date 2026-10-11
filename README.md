@@ -42,7 +42,11 @@ Focus the target agent first. The default `prefix` is `Ctrl+B`: press and releas
 
 **Unread:** staying in the agent keeps the mark. A real terminal scrollback movement, leaving and returning, toggling again, saving a note, or renaming its Tab clears unread. A Tab rename acknowledges all agents in that Tab. Output growth and resizing do not count as reading. A viewed completion shows green `○`; the next completion shows blue `●` again. Working and blocked states take priority over unread.
 
-**Scroll scope:** the plugin subscribes to Herdr terminal scrollback events. In Herdr 0.9.1, a fullscreen agent can receive wheel input directly while the terminal scrollback offset stays at zero. Such internal scrolling does not acknowledge unread; complete support requires a user-scroll event from Herdr.
+**Completion tracking:** every observed completion starts blue, including in the active Tab. When available, Herdr's `completion_seq` identifies the completed round independently of its native seen state. Older versions use observed working/blocked → idle transitions; an idle snapshot alone cannot recover work completed while the plugin was absent. Acknowledging a round never calls native `agent focus` or changes another agent's lifecycle.
+
+**Scroll scope:** the plugin subscribes to Herdr terminal scrollback events. In Herdr 0.9.1, a fullscreen agent can receive wheel input directly while the terminal scrollback offset stays at zero. Such internal scrolling is not yet detected. An external input hook is under investigation; the plugin does not require a patched Herdr.
+
+**Event limits:** Herdr's focus/rename events carry neither an original sequence nor a user/plugin origin. Hooks for a pane that is no longer focused or a superseded Tab name only refresh metadata. A late event that still matches current state cannot always be distinguished from a new interaction. Automatic Tab renames also acknowledge unread, just like manual ones.
 
 | State | Light |
 | --- | --- |

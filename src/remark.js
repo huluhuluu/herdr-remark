@@ -3,21 +3,28 @@
 const herdr = require("./herdr");
 const blink = require("./blink");
 const { clean, directory } = require("./text");
-const { DATA_SOURCE, LAMP_SOURCE, READ_SOURCE, DATA_TOKENS, READ_TOKENS,
-  stateOf, lampTokens, readTokens } = require("./tokens");
+const { DATA_SOURCE, LAMP_SOURCE, READ_SOURCE, ACTIVITY_SOURCE, DATA_TOKENS, READ_TOKENS,
+  stateOf, lampTokens, readTokens, activityTokens } = require("./tokens");
 
 function initialNote(pane) {
   return clean(pane.label || pane.tokens?.summary || pane.terminal_title_stripped || pane.title || "");
 }
 
 function readPane(id) {
-  const pane = herdr.cli(["pane", "get", id]).pane;
-  // Only agent.list exposes the completion generation. Remember which turn was
-  // viewed rather than treating all future completions as read.
-  if (pane?.agent_status === "done") {
+  let pane;
+  try { pane = herdr.cli(["pane", "get", id]).pane; }
+  catch (error) { if (error.code === "pane_not_found") return; throw error; }
+  // AgentInfo exposes lifecycle generations even when Herdr calls a completion
+  // idle because the Tab was already active. PaneInfo does not carry them.
+  if (pane?.agent) {
     const agent = (herdr.cli(["agent", "list"]).agents || []).find(item =>
-      item.pane_id === id && item.terminal_id === pane.terminal_id && item.agent_status === "done");
-    if (agent) pane.state_change_seq = agent.state_change_seq;
+      item.pane_id === id && item.terminal_id === pane.terminal_id);
+    if (agent) {
+      pane.agent_status = agent.agent_status;
+      pane.state_change_seq = agent.state_change_seq;
+      pane.completion_seq = agent.completion_seq;
+      pane.tokens = agent.tokens;
+    }
   }
   return pane;
 }
@@ -32,20 +39,24 @@ function report(id, source, seq, tokens) {
 // and earlier batch snapshots identify the target, not its display values.
 function update(pane, unread) {
   let seq = herdr.sequence();
-  let live;
-  try { live = readPane(pane.pane_id); }
-  catch (error) { if (error.code === "pane_not_found") return false; throw error; }
+  let live = readPane(pane.pane_id);
   if (!live) return false;
+  if (pane.terminal_id && pane.terminal_id !== live.terminal_id) return false;
+  const activity = live.agent && activityTokens(live);
+  if (activity) {
+    report(live.pane_id, ACTIVITY_SOURCE, seq, activity);
+    live.tokens = { ...live.tokens, ...activity };
+  }
   if (live.agent && unread !== undefined) {
-    report(live.pane_id, READ_SOURCE, seq, readTokens(live, unread));
+    report(live.pane_id, READ_SOURCE, seq, readTokens(live, unread, seq));
     // Render the accepted state, even if this action lost to a newer action.
     seq = herdr.sequence();
-    try { live = readPane(pane.pane_id); }
-    catch (error) { if (error.code === "pane_not_found") return false; throw error; }
+    live = readPane(pane.pane_id);
     if (!live) return false;
   }
   if (!live.agent) {
     report(live.pane_id, READ_SOURCE, seq, Object.fromEntries(READ_TOKENS.map(key => [key, null])));
+    report(live.pane_id, ACTIVITY_SOURCE, seq, { remark_activity: null });
     report(live.pane_id, DATA_SOURCE, seq, Object.fromEntries(DATA_TOKENS.map(key => [key, null])));
     report(live.pane_id, LAMP_SOURCE, seq, lampTokens(live));
     return true;
@@ -65,9 +76,8 @@ function update(pane, unread) {
 }
 
 function toggle(pane) {
-  if (pane.agent_status === "done") pane = readPane(pane.pane_id) || pane;
+  pane = readPane(pane.pane_id) || pane;
   const unread = !(pane.tokens?.remark_unread || stateOf(pane) === "unread");
-  if (!unread && pane.agent_status === "done") herdr.cli(["agent", "focus", pane.pane_id]);
   update(pane, unread);
   return unread;
 }
@@ -113,11 +123,24 @@ function event() {
   const name = process.env.HERDR_PLUGIN_EVENT || envelope.event;
   if (name === "tab.renamed") {
     const tabId = data.tab_id || data.tab?.tab_id;
-    refresh((herdr.cli(["agent", "list"]).agents || []).filter(pane => pane.tab_id === tabId), false);
+    const panes = (herdr.cli(["agent", "list"]).agents || []).filter(pane => pane.tab_id === tabId);
+    if (!panes.length) return;
+    const tab = herdr.cli(["tab", "list", "--workspace", panes[0].workspace_id])
+      .tabs?.find(item => item.tab_id === tabId);
+    // An older rename may be delivered after another rename. It still refreshes
+    // metadata, but must not acknowledge the current name's unread state.
+    refresh(panes, typeof data.label === "string" && data.label === tab?.label ? false : undefined);
     return;
   }
   const id = data.pane_id || data.pane?.pane_id;
-  if (id) update({ pane_id: id }, name === "pane.focused" ? false : undefined);
+  if (id) {
+    let unread;
+    if (name === "pane.focused") {
+      const pane = readPane(id);
+      if (pane?.focused) unread = false;
+    }
+    update({ pane_id: id }, unread);
+  }
 }
 
 function main(command = process.argv[2]) {
