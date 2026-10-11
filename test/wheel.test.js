@@ -6,9 +6,11 @@ const path = require("node:path");
 const readline = require("node:readline");
 const wheel = require("../src/wheel");
 const socket = require("../src/socket");
+const wezterm = require("../src/wezterm");
 
 const original = socket.request;
-afterEach(() => { socket.request = original; });
+const originalWezterm = wezterm.verify;
+afterEach(() => { socket.request = original; wezterm.verify = originalWezterm; });
 const agent = () => ({ pane_id: "p2", terminal_id: "term2", state_change_seq: 42,
   completion_seq: 40, agent_status: "done", tokens: { remark_unread: "100" } });
 const event = { foreground: true, delta: -120, window: 123, x: 800, y: 400 };
@@ -92,6 +94,19 @@ test("insufficient visible text is left unread", async () => {
   assert.equal(await wheel.target(event, new Map([["p2", agent()]]), () => {
     throw new Error("must not verify");
   }, {}), undefined);
+});
+
+test("all hosts retain the final native check; failed WezTerm matching cannot fall back to UIA", async () => {
+  const request = { ...event, host: { name: "wezterm", client: { Left: 0, Top: 0, Right: 900, Bottom: 600 } } };
+  const bounds = { left: 20, top: 20, right: 850, bottom: 500 };
+  wezterm.verify = async () => bounds;
+  let packet;
+  assert.equal(await wheel.verifyHost(request, async value => { packet = value; return false; }, {}), false);
+  assert.equal(packet.bounds, bounds);
+  assert.equal(packet.client, request.host.client);
+  wezterm.verify = async () => undefined;
+  assert.equal(await wheel.verifyHost(request, () => { throw new Error("no UIA fallback"); }, {}), false);
+  assert.equal(await wheel.verifyHost(event, async value => value === event, {}), true);
 });
 
 test("native helper handles UTF-8 verification and exits when its parent closes stdin", {

@@ -5,6 +5,7 @@ const { spawn } = require("node:child_process");
 const readline = require("node:readline");
 const socket = require("./socket");
 const herdr = require("./herdr");
+const wezterm = require("./wezterm");
 
 // Whole visible lines let UI Automation locate the pane without guessing the
 // sidebar width, font metrics, Unicode cell widths, or the caller's HERDR_PANE_ID.
@@ -36,6 +37,15 @@ async function target(event, watched, verify, options) {
   const lines = anchors(read?.text).filter(item => item.row < rect.height);
   if (lines.length < 2) return;
   if (await verify({ ...event, anchors: lines, width: rect.width, height: rect.height })) return previous;
+}
+
+async function verifyHost(request, verify, env) {
+  if (request.host?.name === "wezterm") {
+    const bounds = await wezterm.verify(request, env);
+    if (!bounds) return false;
+    return verify({ ...request, bounds, client: request.host.client });
+  }
+  return verify(request);
 }
 
 // One optional native helper belongs to the existing monitor. No terminal
@@ -91,11 +101,11 @@ function start(getWatched, onRead, onError, env = process.env) {
     busy = true;
     const seq = herdr.sequence();
     const watched = new Map(getWatched());
-    target(event, watched, verify, { socketPath: env.HERDR_SOCKET_PATH })
+    target(event, watched, request => verifyHost(request, verify, env), { socketPath: env.HERDR_SOCKET_PATH })
       .then(agent => { if (!closed && agent) onRead(agent, seq); })
       .catch(onError).finally(() => { busy = false; });
   });
   return { close };
 }
 
-module.exports = { anchors, target, start };
+module.exports = { anchors, target, verifyHost, start };

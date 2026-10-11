@@ -12,10 +12,12 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
 public static class RemarkWheel {
     [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] struct Mouse {
         public Point Point; public uint Data, Flags, Time; public UIntPtr Extra;
     }
@@ -38,6 +40,10 @@ public static class RemarkWheel {
     [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window, uint flag);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr window, ref Point point);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder name, int size);
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("kernel32.dll", CharSet=CharSet.Auto)] static extern IntPtr GetModuleHandle(string module);
     static Wheel Latest;
     public static readonly ConcurrentQueue<string> Commands = new ConcurrentQueue<string>();
@@ -80,7 +86,18 @@ public static class RemarkWheel {
             GetForegroundWindow().ToInt64() == window &&
             GetAncestor(WindowFromPoint(point), 2).ToInt64() == window;
     }
+    public static Rect Client(long window) {
+        Rect rect; var point = new Point();
+        if (!GetClientRect(new IntPtr(window), out rect) || !ClientToScreen(new IntPtr(window), ref point))
+            throw new Win32Exception();
+        return new Rect { Left=point.X, Top=point.Y, Right=point.X+rect.Right, Bottom=point.Y+rect.Bottom };
+    }
+    public static string Class(long window) {
+        var name = new StringBuilder(256); GetClassName(new IntPtr(window), name, name.Capacity);
+        return name.ToString();
+    }
     public static void Start(uint[] targets, int seconds) {
+        SetProcessDPIAware();
         Targets = new HashSet<uint>(targets);
         Worker = new Thread(() => {
             IntPtr hook = SetWindowsHookEx(14, Handler, GetModuleHandle(null), 0);
@@ -110,8 +127,8 @@ public static class RemarkWheel {
 function Test-Pane($Request) {
     $taskRoot = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$Request.window)
     $taskCondition = [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::ClassNameProperty, 'TermControl')
-    $taskControls = $taskRoot.FindAll([System.Windows.Automation.TreeScope]::Descendants, $taskCondition)
+        [System.Windows.Automation.AutomationElement]::IsTextPatternAvailableProperty, $true)
+    $taskControls = $taskRoot.FindAll([System.Windows.Automation.TreeScope]::Subtree, $taskCondition)
     foreach ($taskControl in $taskControls) {
         if (!$taskControl.Current.BoundingRectangle.Contains([double]$Request.x, [double]$Request.y)) { continue }
         $taskPattern = $taskControl.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
@@ -154,7 +171,23 @@ function Test-Pane($Request) {
 }
 
 function Get-TerminalIds {
-    @(Get-Process -Name WindowsTerminal -ErrorAction SilentlyContinue | ForEach-Object { [uint32]$_.Id })
+    @(Get-Process -Name WindowsTerminal,wezterm-gui,conhost,OpenConsole -ErrorAction SilentlyContinue |
+        ForEach-Object { [uint32]$_.Id })
+}
+
+function Test-HostPane($Request) {
+    $taskProcess = Get-Process -Id $Request.process -ErrorAction Stop
+    if ($taskProcess.ProcessName -ne 'wezterm-gui') { return Test-Pane $Request }
+    # Node validates WezTerm's focused pane and text via its read-only CLI.
+    # Recheck the client rectangle so moving/resizing during that read cannot
+    # turn stale coordinates into an acknowledgement.
+    $taskClient = [RemarkWheel]::Client($Request.window)
+    if (!$Request.bounds -or !$Request.client) { return $false }
+    foreach ($taskEdge in @('Left','Top','Right','Bottom')) {
+        if ($taskClient.$taskEdge -ne $Request.client.$taskEdge) { return $false }
+    }
+    return $Request.x -ge $Request.bounds.left -and $Request.x -lt $Request.bounds.right -and
+        $Request.y -ge $Request.bounds.top -and $Request.y -lt $Request.bounds.bottom
 }
 $taskCount = 0
 try {
@@ -175,7 +208,7 @@ try {
             $taskMatched = $false
             try {
                 $taskMatched = [RemarkWheel]::Current($taskRequest.window, $taskRequest.x, $taskRequest.y, $taskRequest.time) -and
-                    (Test-Pane $taskRequest) -and
+                    (Test-HostPane $taskRequest) -and
                     [RemarkWheel]::Current($taskRequest.window, $taskRequest.x, $taskRequest.y, $taskRequest.time)
             } catch { $taskMatched = $false }
             [ordered]@{event='verified';id=$taskRequest.id;matched=[bool]$taskMatched} | ConvertTo-Json -Compress
@@ -183,9 +216,19 @@ try {
         $taskWheel = [RemarkWheel]::Take()
         if ($taskWheel -and $taskWheel.Foreground) {
             $taskCount++
+            $taskHost = $null
+            if (!$Probe) {
+                try {
+                    $taskProcess = Get-Process -Id $taskWheel.ProcessId -ErrorAction Stop
+                    if ($taskProcess.ProcessName -eq 'wezterm-gui') {
+                        $taskHost = @{ name='wezterm'; executable=(Join-Path (Split-Path $taskProcess.Path) 'wezterm.exe');
+                            class=[RemarkWheel]::Class($taskWheel.Window); client=[RemarkWheel]::Client($taskWheel.Window) }
+                    }
+                } catch { continue }
+            }
             [ordered]@{event='wheel';x=$taskWheel.X;y=$taskWheel.Y;delta=$taskWheel.Delta;
                 horizontal=$taskWheel.Horizontal;process=$taskWheel.ProcessId;window=$taskWheel.Window;
-                foreground=$taskWheel.Foreground;injected=$taskWheel.Injected;time=$taskWheel.Time} | ConvertTo-Json -Compress
+                foreground=$taskWheel.Foreground;injected=$taskWheel.Injected;time=$taskWheel.Time;host=$taskHost} | ConvertTo-Json -Depth 4 -Compress
         }
         Start-Sleep -Milliseconds 50
     }

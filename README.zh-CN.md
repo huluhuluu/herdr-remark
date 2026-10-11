@@ -20,6 +20,8 @@ Remark 使用 Herdr 的统一 pane 身份与状态 API，**没有 Agent 名称�
 | 运行环境 | 状态、备注、快捷键 | 终端回滚→已读 | 全屏应用内滚轮→已读 |
 | --- | --- | --- | --- |
 | Windows＋Windows Terminal | 支持 | 支持 | 支持，使用只读原生监听 |
+| Windows＋WezTerm | 支持 | 支持 | 已实现只读 CLI 匹配，待人工滚轮确认 |
+| Windows＋Console Host／OpenConsole | 支持 | 支持 | 已实现，要求提供 UIA TextPattern；待人工确认 |
 | Windows＋其他终端 | 支持 | 支持 | 尚未实现 |
 | macOS | 支持 | 支持 | 尚未实现 |
 | Linux | 支持 | 支持 | 尚未实现 |
@@ -28,6 +30,19 @@ Remark 使用 Herdr 的统一 pane 身份与状态 API，**没有 Agent 名称�
 要求 **Herdr 0.8.2+、Node.js 18+ 和 Git**，且 Herdr 插件进程能够找到这些可执行文件。推荐 Herdr 0.9.1+，包含原生聚焦事件修复；新版接口提供 `completion_seq` 时自动使用，无需针对版本增加适配器。
 
 Windows Terminal 滚动已读已在 Herdr 0.9.1 会话中确认可用。CI 覆盖 Windows、macOS、Linux 和 Node.js 18/20/22/24；Agent 接口回归测试包含 Codex、Claude Code、DST／`dsh-tui`、OpenCode、Copilot 及任意自定义名称。测试验证的是统一 API 行为，**不代表逐一安装、实测了所有 Agent 和终端**。原生 macOS／Linux 桌面交互尚未手工验证。
+
+### 终端与 Shell
+
+在支持的终端中运行 Windows 版 Herdr／Node 时，PowerShell、PowerShell 7、CMD、Git Bash 使用相同实现。提供窗口与文本接口的是终端宿主，与 Shell 和 Agent 无关。Herdr／Node 若运行在 **WSL、SSH 或容器内部**，即使窗口是 Windows Terminal 或 WezTerm，也无法使用本地 Windows 监听器；公开 Herdr 终端回滚识别仍然可用。
+
+- **Windows Terminal／Preview：** 共用监听器核对前台窗口，通过 [UI Automation TextPattern](https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/ui-automation-textpattern-overview) 匹配 pane 可见内容及坐标。
+- **Windows 版 WezTerm：** 使用运行中 GUI 同目录的 `wezterm.exe`，兼容便携版；无需修改 Lua 配置、绑定鼠标或包装 Agent。只读 [`list-clients`](https://wezterm.org/cli/cli/list-clients.html)、[`list`](https://wezterm.org/cli/cli/list.html)、[`get-text`](https://wezterm.org/cli/cli/get-text.html) 共同核对 GUI PID、聚焦的终端 pane 和 Herdr 内容。命令带 `--no-auto-start`，不会启动终端或 mux 服务。继承的 `WEZTERM_UNIX_SOCKET` 或公开窗口 class 发现机制需要能连接目标 GUI；同一 class 下有多个独立 GUI 实例时，可能需要从目标实例启动 Herdr，以继承它的 socket。
+- **Console Host（`conhost.exe`）／OpenConsole：** 复用文本适配器，不再限定 `TermControl` 类名；要求宿主通过 TextPattern 提供可见文本和字符矩形。属于能力检测支持，不代表所有控制台版本均提供这些接口。
+- **其他终端**，包括 Alacritty、mintty、ConEmu、Tabby、Hyper：基础功能通过 Herdr 工作，全屏应用内滚轮识别尚未实现。仅添加进程名不能补齐文本与几何接口。
+
+已使用本机 **WezTerm 20240203-110809-5046fc22** 的 CLI 和临时 GUI 验证进程身份、pane 文本、像素尺寸、内容范围，以及非聚焦窗口拒绝判定。自动测试覆盖分屏／缩放 pane、Unicode 侧栏、边距、内容歧义和焦点切换。WezTerm、Console Host／OpenConsole 的真实滚轮→已读仍待人工确认。本次未安装额外终端或 Agent。
+
+WezTerm CLI 不提供边距及标签栏的实际位置，因此使用客户区内所有可能网格位置的共同内容范围。**靠近 pane 边缘滚动可能保留未读**，大边距或 Unicode 前缀下尤为明显，建议在内容区中部滚动。CLI 能力缺失、GUI socket 无法访问或内容匹配不唯一时保留未读；不支持自定义覆盖层。仍可使用其他查看操作，不会为绕过限制修改终端配置。
 
 ## 安装
 
@@ -111,7 +126,7 @@ herdr plugin config-dir huluhlu.agent-inform
 | --- | --- |
 | `blink` | false 时工作灯常亮，仍保留滚动已读。 |
 | `blink_interval_ms` | 闪烁间隔，限制为 100–60000 毫秒，默认 800。 |
-| `wheel_read` | 启用 Windows Terminal 滚轮监听；false 时仍保留公开终端回滚识别。 |
+| `wheel_read` | 启用支持宿主的共用 Windows 滚轮监听；false 时仍保留公开终端回滚识别。 |
 
 配置在监控下一轮生效；监控已退出时执行 `npm run init`。原生辅助进程仅在存在未读 pane 时运行；没有未读 pane 或需要闪烁的工作灯时，共用监控也会退出。颜色是静态配置，可在 Herdr 侧栏配置中调整。
 
@@ -132,7 +147,7 @@ npm run init
 ## 排查问题
 
 - **Agent 缺失或工作／阻塞状态不正确：** 查看 `herdr agent explain <pane_id>` 和 [Herdr 检测说明](https://herdr.dev/docs/agents/)。Remark 只写自己的元数据，不报告执行状态，也不清除 Agent authority。
-- **全屏滚动仍是蓝色：** 原生监听目前仅支持 Windows Terminal，需匹配前台窗口、实际聚焦 pane、可见内容和内容区坐标。锁屏／后台窗口、匹配歧义或文字不足时保留未读，可用其他查看操作清除。监听不吞掉或注入鼠标输入、不读取键盘；文本只经本地管道在内存中比对，不保存或记入日志。
+- **全屏滚动仍是蓝色：** 先核对[宿主支持与验证情况](#终端与-shell)。需匹配前台窗口、实际聚焦 pane、可见内容和内容区坐标。锁屏／后台窗口、匹配歧义或文字不足时保留未读；WezTerm 可尝试内容区中部，并确认同目录 CLI 能连接 GUI。无法匹配时可用其他查看操作清除。监听不吞掉或注入鼠标输入、不读取键盘；文本只经本地管道在内存中比对，不保存或记入日志。
 - **监听停止：** 执行 `npm run init`。只诊断输入可运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`；该限时探针不改变已读状态、不读取对话文本。
 - **刷新失败：** 查看 `herdr plugin log list --plugin huluhlu.agent-inform`；确认已有服务器的插件环境能找到 Node.js、Git 和 Herdr。修正后重新执行 `npm run init`。
 

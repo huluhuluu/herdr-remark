@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.4
+
+- Add a Windows WezTerm adapter using the running GUI's read-only CLI, with PID/focus/content checks and bounds derived from actual pane sizes. Account for relative GUI socket discovery in the Windows runtime directory.
+- Share native input capture, final foreground checks and generation-aware acknowledgement across hosts. Reuse UIA TextPattern for Console Host/OpenConsole instead of requiring Windows Terminal's control class.
+- Add split/zoom, Unicode, padding, ambiguity, CLI failure and focus-change regression tests. Verify real WezTerm 20240203 CLI/GUI data and hidden-window rejection; physical wheel confirmation remains pending for the new hosts.
+- Document host versus shell support, Windows/WSL/remote boundaries, validation levels and WezTerm edge/multiple-instance limitations in both READMEs. No new dependencies, terminal config changes or Agent installations.
+
 ## 0.6.3
 
 - Confirm Windows Terminal scroll-to-read works in the existing Herdr 0.9.1 environment. No additional Agents were installed.
