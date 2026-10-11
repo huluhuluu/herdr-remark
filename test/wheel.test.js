@@ -95,7 +95,7 @@ test("insufficient visible text is left unread", async () => {
 });
 
 test("native helper handles UTF-8 verification and exits when its parent closes stdin", {
-  skip: process.platform !== "win32", timeout: 15000,
+  skip: process.platform !== "win32", timeout: 45000,
 }, async () => {
   const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
     "-File", path.join(__dirname, "..", "scripts", "wheel.ps1")], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
@@ -103,17 +103,29 @@ test("native helper handles UTF-8 verification and exits when its parent closes 
   const messages = [];
   let errors = "";
   child.stderr.on("data", data => { errors += data; });
-  const deadline = setTimeout(() => child.kill(), 10000);
+  let deadline, phase, timedOut = false;
+  const arm = (next, milliseconds) => {
+    clearTimeout(deadline);
+    phase = next;
+    deadline = setTimeout(() => { timedOut = true; child.kill(); }, milliseconds);
+  };
+  // Cold Windows runners also pay PowerShell/.NET compiler startup. Keep the
+  // protocol and EOF limits short so a real lifecycle regression still fails.
+  arm("startup", 30000);
   try {
     const exit = new Promise((resolve, reject) => { child.on("error", reject); child.on("exit", resolve); });
     lines.on("line", line => {
       const message = JSON.parse(line);
       messages.push(message);
-      if (message.event === "hook_ready") child.stdin.write(JSON.stringify({ event: "verify", id: 1,
-        window: 0, time: 0, x: 0, y: 0, anchors: [{ row: 0, text: "不应读取或修改任何状态" }] }) + "\n");
-      if (message.event === "verified") child.stdin.end();
+      if (message.event === "hook_ready") {
+        arm("verification", 5000);
+        child.stdin.write(JSON.stringify({ event: "verify", id: 1,
+          window: 0, time: 0, x: 0, y: 0, anchors: [{ row: 0, text: "不应读取或修改任何状态" }] }) + "\n");
+      }
+      if (message.event === "verified") { arm("EOF shutdown", 5000); child.stdin.end(); }
     });
-    assert.equal(await exit, 0, errors);
+    const code = await exit;
+    assert.equal(code, 0, timedOut ? `Native helper timed out during ${phase}: ${errors}` : errors);
     assert.deepEqual(messages.find(item => item.event === "verified"), { event: "verified", id: 1, matched: false });
     assert.ok(messages.some(item => item.event === "hook_stopped"));
   } finally { clearTimeout(deadline); lines.close(); child.kill(); }
