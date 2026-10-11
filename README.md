@@ -40,7 +40,9 @@ Focus the target agent first. The default `prefix` is `Ctrl+B`: press and releas
 | `prefix+u` | Toggle read / unread |
 | `prefix+shift+u` | Edit a note in a small popup |
 
-**Unread:** simply staying in the agent keeps the mark. Scroll partway in either direction, leave and return, or toggle again to clear it. Output growth and resizing do not count as reading. A viewed completion shows green `○`; the next completion shows blue `●` again. Working and blocked states take priority over unread.
+**Unread:** staying in the agent keeps the mark. A real terminal scrollback movement, leaving and returning, toggling again, saving a note, or renaming its Tab clears unread. A Tab rename acknowledges all agents in that Tab. Output growth and resizing do not count as reading. A viewed completion shows green `○`; the next completion shows blue `●` again. Working and blocked states take priority over unread.
+
+**Scroll scope:** the plugin subscribes to Herdr terminal scrollback events. In Herdr 0.9.1, a fullscreen agent can receive wheel input directly while the terminal scrollback offset stays at zero. Such internal scrolling does not acknowledge unread; complete support requires a user-scroll event from Herdr.
 
 | State | Light |
 | --- | --- |

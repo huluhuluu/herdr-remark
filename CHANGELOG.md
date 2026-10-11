@@ -2,6 +2,8 @@
 
 ## 0.6.0
 
+- Saving a note acknowledges its agent; renaming a Tab acknowledges all agents in that Tab without changing their lifecycle status.
+- Reconcile scrolling during subscription setup and document the distinction between terminal scrollback and fullscreen application scrolling.
 - Keep two shortcuts for read/unread and popup note editing.
 - Refresh directory, Tab name and Git branch from current pane state; Tab renames refresh all affected agents.
 - Share one monitor between working-light animation and scroll-to-read; disabling animation keeps a steady working light.

@@ -77,13 +77,13 @@ function saveNote(terminalId, note) {
   const value = clean(note);
   // Herdr trims names; a leading space keeps a literal '--clear' from being an option.
   herdr.cli(["pane", "rename", pane.pane_id, value ? " " + value : "--clear"]);
-  update(pane);
+  update(pane, false);
 }
 
-function refresh(panes) {
+function refresh(panes, unread) {
   const failures = [];
   for (const pane of panes) {
-    try { update(pane); }
+    try { update(pane, unread); }
     catch (error) {
       if (error.code !== "pane_not_found") failures.push(`${pane.pane_id}: ${error.message}`);
     }
@@ -113,7 +113,7 @@ function event() {
   const name = process.env.HERDR_PLUGIN_EVENT || envelope.event;
   if (name === "tab.renamed") {
     const tabId = data.tab_id || data.tab?.tab_id;
-    refresh((herdr.cli(["agent", "list"]).agents || []).filter(pane => pane.tab_id === tabId));
+    refresh((herdr.cli(["agent", "list"]).agents || []).filter(pane => pane.tab_id === tabId), false);
     return;
   }
   const id = data.pane_id || data.pane?.pane_id;

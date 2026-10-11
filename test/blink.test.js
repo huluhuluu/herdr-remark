@@ -437,6 +437,33 @@ test("scrolling immediately after marking unread is detected during monitor star
   assert.equal(reads, 1);
 });
 
+test("scrolling while the subscription is being established is not lost", async () => {
+  settings.load = () => ({ blink: false, blinkIntervalMs: 1 });
+  const e = env();
+  const agent = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "done",
+    state_change_seq: 1, tokens: {} };
+  let offset = 0, lists = 0, reads = 0;
+  remark.update = () => {};
+  socket.request = async (method, params) => {
+    if (method === "agent.list") return { agents: ++lists < 6 ? [structuredClone(agent)] : [] };
+    if (method === "pane.list") return { panes: [{ pane_id: "p1", scroll: {
+      offset_from_bottom: offset, max_offset_from_bottom: 100, viewport_rows: 30,
+    } }] };
+    assert.equal(params.source, READ_SOURCE);
+    reads++;
+    agent.tokens = { remark_seen: "1" };
+    return {};
+  };
+  socket.subscribe = () => {
+    // Herdr starts its subscription baseline here. Movement since pane.list
+    // precedes that baseline and therefore produces no subscription event.
+    offset = 3;
+    return { ready: Promise.resolve(), close() {}, closed: false };
+  };
+  await blink.run(e);
+  assert.equal(reads, 1);
+});
+
 // Use a local TCP transport to exercise actual stream framing and EOF on every
 // CI platform; the production endpoint is still a named pipe / Unix socket.
 async function transport(t, respond) {

@@ -146,6 +146,13 @@ async function run(env = process.env) {
     })
       .catch(error => record(error, env)).finally(() => reading.delete(agent.pane_id));
   };
+  const observeScroll = (pane_id, scroll, seq, fresh) => {
+    const previous = positions.get(pane_id);
+    positions.set(pane_id, scroll);
+    const agent = watched.get(pane_id);
+    if (!agent || reading.has(pane_id) || !scrolled(previous, scroll)) return;
+    queueRead(agent, seq, fresh);
+  };
   try {
     for (;;) {
       if (reloadStamp(env) !== loadedStamp) { reload = true; break; }
@@ -189,13 +196,15 @@ async function run(env = process.env) {
               ({ type: "pane.scroll_changed", pane_id })), event => {
               if (event.event !== "pane.scroll_changed") return;
               const { pane_id, scroll } = event.data;
-              const previous = positions.get(pane_id);
-              positions.set(pane_id, scroll);
-              const agent = watched.get(pane_id);
-              if (!agent || reading.has(pane_id) || !scrolled(previous, scroll)) return;
-              queueRead(agent, herdr.sequence(), true);
+              observeScroll(pane_id, scroll, herdr.sequence(), true);
             }, options);
             await subscription.ready;
+            // Herdr establishes its own baseline when subscribing. Reconcile
+            // movement after our first snapshot but before that baseline.
+            const baselineSeq = herdr.sequence();
+            const current = (await socket.request("pane.list", {}, options)).panes || [];
+            for (const pane of current) if (watched.has(pane.pane_id))
+              observeScroll(pane.pane_id, pane.scroll, baselineSeq, false);
           } catch (error) {
             subscription?.close();
             subscription = undefined;

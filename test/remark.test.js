@@ -95,6 +95,43 @@ test("layout metadata is compact and omits an absent branch", () => {
   remark.update(pane, false);
   assert.equal(pane.tokens.remark_lamp_idle, "○");
 });
+
+test("note and Tab renames acknowledge unread without changing the agent lifecycle", () => {
+  for (const action of ["note", "tab"]) {
+    for (const status of ["idle", "done", "working", "blocked"]) {
+      const { pane } = fixture(status);
+      pane.state_change_seq = 10;
+      pane.tokens = { remark_unread: "1" };
+      if (action === "note") {
+        herdr.paneForTerminal = () => pane;
+        remark.saveNote("term", "updated note");
+      } else {
+        process.env.HERDR_PLUGIN_EVENT = "tab.renamed";
+        process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: pane.tab_id } });
+        remark.main("event");
+      }
+      assert.equal(pane.agent_status, status);
+      assert.equal(pane.tokens.remark_unread, undefined);
+      const lamp = status === "done" ? "idle" : status;
+      assert.ok(pane.tokens["remark_lamp_" + lamp], `${action}: ${status}`);
+      if (status === "done") {
+        assert.equal(pane.tokens.remark_seen, "10");
+        pane.state_change_seq = 11;
+        remark.update(pane);
+        assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+      }
+    }
+  }
+});
+
+test("a failed note rename does not clear unread", () => {
+  const { pane } = fixture();
+  pane.tokens = { remark_unread: "1" };
+  herdr.paneForTerminal = () => pane;
+  herdr.cli = () => { throw Error("rename failed"); };
+  assert.throws(() => remark.saveNote("term", "new note"), /rename failed/);
+  assert.equal(pane.tokens.remark_unread, "1");
+});
 test("note cleaning and terminal identity remain bounded", () => {
   assert.equal(remark.clean("  hello\n\x1b[31m世界\x1b[0m  "), "hello 世界");
   // OSC and non-CSI escapes must not leak their payload as visible text.
@@ -107,7 +144,8 @@ test("note cleaning and terminal identity remain bounded", () => {
   remark.update(pane, true);
   remark.saveNote("term", "new note");
   assert.equal(pane.tokens.remark_note, "new note");
-  assert.equal(pane.tokens.remark_unread, "1");
+  assert.equal(pane.tokens.remark_unread, undefined);
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
   remark.saveNote("term", "--clear");
   assert.equal(pane.tokens.remark_note, "--clear");
   remark.saveNote("term", "");
@@ -245,7 +283,7 @@ test("init checks the current Tab and branch for every pane", () => {
 
 test("a Tab rename refreshes its agents from current state, not an old event label", () => {
   const pane = { pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1", cwd: "C:\\work\\repo",
-    agent: "codex", agent_status: "idle", tokens: { remark_tab: "Old" } };
+    agent: "codex", agent_status: "idle", tokens: { remark_tab: "Old", remark_unread: "1" } };
   const calls = [];
   herdr.branch = () => "main";
   herdr.cli = args => {
@@ -260,8 +298,11 @@ test("a Tab rename refreshes its agents from current state, not an old event lab
   process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: "w1:t1", label: "Renamed" } });
   remark.main("event");
   assert.equal(pane.tokens.remark_tab, "Current");
+  assert.equal(pane.tokens.remark_unread, undefined);
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  assert.equal(calls.some(c => c.startsWith("pane report-metadata w1:p9 ")), false);
   assert.equal(calls.filter(c => c.startsWith("tab list")).length, 1);
-  assert.equal(calls.filter(c => c.startsWith("pane get")).length, 1);
+  assert.equal(calls.filter(c => c.startsWith("pane get")).length, 2);
 
   // A payload without a label field still resolves it, once for the batch.
   process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: "w1:t1" } });
