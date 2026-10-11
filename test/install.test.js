@@ -142,6 +142,20 @@ test("reload failure in a successful CLI response is not reported as installed",
       : f.execute(bin, args, env);
     assert.throws(() => install({ ...f, execute }), /Config reload/);
     assert.equal(fs.readFileSync(f.target, "utf8"), f.original);
-    assert.equal(f.calls.some(c => c.endsWith("remark.js init")), false);
+    assert.equal(f.calls.some(c => c.endsWith("remark.js reload")), false);
   }
+});
+
+test("a failed init warns without discarding a successful install", t => {
+  const f = fixture(t);
+  const execute = (bin, args, env) => {
+    if (args.join(" ").endsWith("remark.js reload")) throw Error("init unavailable");
+    return f.execute(bin, args, env);
+  };
+  const result = install({ ...f, execute });
+  // The config and link are live, so the install counts as done...
+  assert.ok(fs.readFileSync(f.target, "utf8").includes("# herdr-remark begin"));
+  assert.ok(f.calls.some(c => c.startsWith("plugin link")));
+  // ...and the failure surfaces as a warning with the recovery command.
+  assert.match(result.warning, /Rerun: npm run init/);
 });

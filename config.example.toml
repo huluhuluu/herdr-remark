@@ -2,9 +2,14 @@
 [ui.sidebar.agents]
 # Native default (Catppuccin) lamp colors; blue adds idle + unread.
 # One lamp + directory token is populated. Empty branch/note tokens disappear.
+# A finished but unviewed turn (`done`) shares the blue unread lamp, since both
+# mean the pane is waiting for you.
 rows = [
   [
     { token = "$remark_lamp_working", fg = "#f9e2af", dim = false },
+    # The dimmed twin the working lamp alternates with while an agent runs.
+    # Both tokens carry the same color; `dim` is what makes the pulse visible.
+    { token = "$remark_lamp_working_blink", fg = "#f9e2af", dim = true },
     { token = "$remark_lamp_blocked", fg = "#f38ba8", dim = false },
     { token = "$remark_lamp_idle", fg = "#a6e3a1", dim = false },
     { token = "$remark_lamp_unread", fg = "#89b4fa", dim = false },
@@ -13,6 +18,13 @@ rows = [
   ],
   [{ token = "$remark_branch", fg = "#7f849c", dim = false }, "$remark_note"],
 ]
+
+# Blink is on by default. To change it, write config.json in this plugin's
+# config directory (see README): {"blink": false} or {"blink_interval_ms": 400}.
+#
+# Stale-row cleanup is on by default too. It clears a pane's agent only when the
+# OS process tree shows no descendants, after rechecking the agent and shell:
+# {"reap": false} or {"reap_interval_ms": 120000}.
 
 [[keys.command]]
 key = "prefix+u"

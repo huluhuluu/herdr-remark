@@ -1,6 +1,6 @@
 {
   "name": "herdr-remark",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "private": true,
   "description": "Two shortcuts for agent read/unread and remarks",
   "license": "MIT",
@@ -25,6 +25,6 @@
   "scripts": {
     "test": "node --test",
     "link": "herdr plugin link .",
-    "init": "node src/remark.js init"
+    "init": "node src/remark.js reload"
   }
 }

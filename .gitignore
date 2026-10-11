@@ -6,3 +6,9 @@ Thumbs.db
 # Local scratch
 tmp/
 *.tmp
+
+# Local credentials and runtime state
+.env
+.env.*
+*.pem
+*.key

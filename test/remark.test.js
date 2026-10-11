@@ -1,8 +1,15 @@
 "use strict";
-const { test, afterEach } = require("node:test");
+const { test, afterEach, after } = require("node:test");
 const assert = require("node:assert/strict");
 const herdr = require("../src/herdr");
 const remark = require("../src/remark");
+const { LAMP_SOURCE, READ_SOURCE } = require("../src/tokens");
+// A fixture that reports a working agent must not spawn a real blink daemon
+// against whatever Herdr server happens to be running on this machine, so the
+// suite runs as though the plugin had no socket.
+const liveSocket = process.env.HERDR_SOCKET_PATH;
+delete process.env.HERDR_SOCKET_PATH;
+after(() => { if (liveSocket !== undefined) process.env.HERDR_SOCKET_PATH = liveSocket; });
 const originals = { cli: herdr.cli, pane: herdr.paneForTerminal, branch: herdr.branch,
   event: process.env.HERDR_PLUGIN_EVENT, json: process.env.HERDR_PLUGIN_EVENT_JSON };
 afterEach(() => {
@@ -14,24 +21,24 @@ function fixture(status = "idle") {
   const pane = { pane_id: "w1:p1", terminal_id: "term", workspace_id: "w1", tab_id: "w1:t1",
     cwd: "C:\\work\\repo", agent: "codex", agent_status: status, revision: 1, state_labels: {}, tokens: {} };
   const calls = [];
-  let lastSeq = -1n;
+  const lastSeq = new Map();
   herdr.branch = () => "main";
   herdr.cli = args => {
     calls.push(args);
     if (args[0] === "tab") return { tabs: [{ tab_id: "w1:t1", label: "Build" }] };
-    if (args[0] === "agent" && args[1] === "list") return { agents: [pane] };
-    if (args[1] === "get") return { pane };
+    if (args[0] === "agent" && args[1] === "list") return { agents: [structuredClone(pane)] };
+    if (args[1] === "get") return { pane: structuredClone(pane) };
     if (args[1] === "focus") pane.agent_status = "idle";
     if (args[1] === "rename") {
       pane.label = args[3] === "--clear" ? undefined : args[3].trim();
     }
     if (args.includes("--seq")) {
       const seq = BigInt(args[args.indexOf("--seq") + 1]);
-      if (seq <= lastSeq) return {};
-      lastSeq = seq;
+      const source = args[args.indexOf("--source") + 1];
+      if (seq <= (lastSeq.get(source) ?? -1n)) return {};
+      lastSeq.set(source, seq);
     }
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === "--clear-state-labels") pane.state_labels = {};
       if (args[i] === "--clear-token") delete pane.tokens[args[++i]];
       if (args[i] === "--token") { const [key, ...rest] = args[++i].split("="); pane.tokens[key] = rest.join("="); }
     }
@@ -46,7 +53,8 @@ test("status lamp combines native state and idle unread", () => {
     ["working", false, "working", "●"], ["working", true, "working", "●"],
     ["blocked", false, "blocked", "●"], ["blocked", true, "blocked", "●"],
     ["idle", false, "idle", "○"], ["idle", true, "unread", "●"],
-    ["done", false, "unread", "●"], ["unknown", true, "unknown", "·"],
+    ["done", false, "unread", "●"], ["done", true, "unread", "●"],
+    ["unknown", true, "unknown", "·"],
     ["unrecognized", false, "unknown", "·"],
   ]) {
     pane.agent_status = status;
@@ -67,13 +75,14 @@ test("toggle leaves lifecycle state unchanged and focus clears unread", () => {
   process.env.HERDR_PLUGIN_EVENT = "pane.focused"; process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { pane_id: pane.pane_id } });
   remark.main("event"); assert.equal(pane.tokens.remark_unread, undefined); assert.equal(pane.tokens.remark_lamp_blocked, "● repo");
 });
-test("native completion is acknowledged and unused metadata is cleared", () => {
+test("native completion is acknowledged without changing state labels", () => {
   const { pane, calls } = fixture("done");
-  pane.state_labels = { idle: "read|Old|branch" };
+  pane.state_labels = { idle: "custom label" };
   assert.equal(remark.toggle(pane), false);
-  assert.deepEqual(calls[0], ["agent", "focus", pane.pane_id]);
+  assert.ok(calls.some(args => args.join(" ") === "agent focus " + pane.pane_id));
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
-  assert.deepEqual(pane.state_labels, {});
+  assert.deepEqual(pane.state_labels, { idle: "custom label" });
+  assert.ok(calls.every(args => !args.includes("--clear-state-labels")));
   const tokens = { ...pane.tokens };
   remark.update(pane);
   assert.deepEqual(pane.tokens, tokens);
@@ -127,9 +136,9 @@ test("slow refresh cannot restore unread or an old note after newer user actions
   remark.update(pane, true);
   const snapshot = structuredClone(pane);
   herdr.branch = () => {
-    delete pane.tokens.remark_unread;
+    herdr.branch = () => "main";
     pane.label = "New note";
-    pane.revision++;
+    remark.update(pane, false);
     return "main";
   };
   remark.update(snapshot);
@@ -207,7 +216,7 @@ function applyMetadata(args, pane) {
   }
 }
 
-test("init fetches each tab label and Git branch once for the whole batch", () => {
+test("init checks the current Tab and branch for every pane", () => {
   const panes = [
     { pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1", cwd: "C:\\work\\repo", agent: "codex", agent_status: "idle", tokens: {} },
     { pane_id: "w1:p2", tab_id: "w1:t1", workspace_id: "w1", cwd: "C:\\work\\repo", agent: "codex", agent_status: "idle", tokens: {} },
@@ -225,16 +234,16 @@ test("init fetches each tab label and Git branch once for the whole batch", () =
     return {};
   };
   remark.main("init");
-  assert.equal(calls.filter(c => c.startsWith("tab list")).length, 1);
-  assert.deepEqual(branchCwds, ["C:\\work\\repo", "C:\\work\\other"]);
-  assert.equal(calls.filter(c => c.startsWith("pane report-metadata")).length, 3);
+  assert.equal(calls.filter(c => c.startsWith("tab list")).length, 3);
+  assert.deepEqual(branchCwds, ["C:\\work\\repo", "C:\\work\\repo", "C:\\work\\other"]);
+  assert.equal(calls.filter(c => c.startsWith("pane report-metadata")).length, 6);
   assert.equal(panes[0].tokens.remark_tab, "Build");
   assert.equal(panes[1].tokens.remark_tab, "Build");
   // An unlabeled tab clears the token instead of falling back to another lookup.
   assert.equal(panes[2].tokens.remark_tab, undefined);
 });
 
-test("a tab rename refreshes its agents from the payload without a tab lookup", () => {
+test("a Tab rename refreshes its agents from current state, not an old event label", () => {
   const pane = { pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1", cwd: "C:\\work\\repo",
     agent: "codex", agent_status: "idle", tokens: { remark_tab: "Old" } };
   const calls = [];
@@ -242,6 +251,7 @@ test("a tab rename refreshes its agents from the payload without a tab lookup", 
   herdr.cli = args => {
     calls.push(args.join(" "));
     if (args[0] === "agent") return { agents: [pane, { ...pane, pane_id: "w1:p9", tab_id: "w1:t9", tokens: {} }] };
+    if (args[0] === "tab") return { tabs: [{ tab_id: "w1:t1", label: "Current" }] };
     if (args[1] === "get") return { pane };
     if (args[1] === "report-metadata") applyMetadata(args, pane);
     return {};
@@ -249,14 +259,14 @@ test("a tab rename refreshes its agents from the payload without a tab lookup", 
   process.env.HERDR_PLUGIN_EVENT = "tab.renamed";
   process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: "w1:t1", label: "Renamed" } });
   remark.main("event");
-  assert.equal(pane.tokens.remark_tab, "Renamed");
-  assert.equal(calls.some(c => c.startsWith("tab list")), false);
+  assert.equal(pane.tokens.remark_tab, "Current");
+  assert.equal(calls.filter(c => c.startsWith("tab list")).length, 1);
   assert.equal(calls.filter(c => c.startsWith("pane get")).length, 1);
 
   // A payload without a label field still resolves it, once for the batch.
   process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: "w1:t1" } });
   remark.main("event");
-  assert.equal(calls.filter(c => c.startsWith("tab list")).length, 1);
+  assert.equal(calls.filter(c => c.startsWith("tab list")).length, 2);
 });
 
 test("directories and note defaults use actual names", () => {
@@ -269,4 +279,232 @@ test("directories and note defaults use actual names", () => {
   assert.equal(remark.initialNote(pane), "Summary");
   delete pane.tokens;
   assert.equal(remark.initialNote(pane), "Title");
+});
+
+test("a directory change pairs the new folder with its own branch, not the old one", () => {
+  const { pane } = fixture();
+  // The caller's snapshot still points at the old directory, which is exactly
+  // the state a `cd` plus a restarted agent produces before Herdr republishes.
+  pane.cwd = "C:\\work\\old-repo";
+  herdr.branch = cwd => cwd === "C:\\work\\new-repo" ? "feat/new" : "old-branch";
+  const cli = herdr.cli;
+  herdr.cli = args => {
+    // By the time update() reads the pane, the directory has already moved.
+    if (args[1] === "get") return { pane: { ...pane, cwd: "C:\\work\\new-repo" } };
+    return cli(args);
+  };
+  remark.update(pane, false);
+  // The lamp carried the new folder while branch still came from the old cwd.
+  assert.equal(pane.tokens.remark_lamp_idle, "○ new-repo");
+  assert.equal(pane.tokens.remark_branch, "feat/new");
+});
+
+test("a batch resolves each branch from that pane's current directory", () => {
+  const stale = { pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1", cwd: "C:\\work\\repo",
+    agent: "codex", agent_status: "idle", tokens: {} };
+  const moved = { pane_id: "w1:p2", tab_id: "w1:t1", workspace_id: "w1", cwd: "C:\\work\\repo",
+    agent: "codex", agent_status: "idle", tokens: {} };
+  const cwds = [];
+  herdr.branch = cwd => { cwds.push(cwd); return cwd === "C:\\work\\other" ? "elsewhere" : "main"; };
+  herdr.cli = args => {
+    if (args[0] === "tab") return { tabs: [{ tab_id: "w1:t1", label: "Build" }] };
+    if (args[1] === "get") {
+      const pane = args[2] === "w1:p2" ? { ...moved, cwd: "C:\\work\\other" } : stale;
+      return { pane };
+    }
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--clear-token") delete moved.tokens[args[++i]];
+      if (args[i] === "--clear-token") delete stale.tokens[args[++i]];
+      if (args[i] === "--token") { const [k, ...r] = args[++i].split("="); (args[2] === "w1:p1" ? stale : moved).tokens[k] = r.join("="); }
+    }
+    return {};
+  };
+  remark.refresh([stale, moved]);
+  // One prefetch for the shared snapshot cwd, plus one re-resolve because the
+  // second pane actually moved.
+  assert.deepEqual(cwds, ["C:\\work\\repo", "C:\\work\\other"]);
+  assert.equal(stale.tokens.remark_branch, "main");
+  // The prefetched branch is the wrong one for the moved pane, so it re-resolves.
+  assert.equal(moved.tokens.remark_branch, "elsewhere");
+});
+
+test("an exited agent clears its stale lamp, branch and note", () => {
+  const { pane, calls } = fixture("working");
+  pane.tokens = { remark_lamp_working: "● repo", remark_branch: "main", remark_note: "note", remark_tab: "Build" };
+  const bare = { ...pane, agent: undefined, agent_status: "unknown", tokens: pane.tokens };
+  herdr.cli = args => {
+    calls.push(args);
+    if (args[0] === "tab") return { tabs: [{ tab_id: "w1:t1", label: "Build" }] };
+    if (args[1] === "get") return { pane: bare };
+    if (args[1] === "report-metadata") applyMetadata(args, bare);
+    return {};
+  };
+  process.env.HERDR_PLUGIN_EVENT = "pane.exited";
+  process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ pane_id: pane.pane_id });
+  remark.main("event");
+  assert.deepEqual(bare.tokens, {});
+  // Exit must not query a tab or Git for a pane it is only clearing.
+  assert.equal(calls.some(args => args[0] === "tab"), false);
+  assert.equal(herdr.branch.called, undefined);
+});
+
+test("an exit also drops a stale unread mark so the next agent is not born unread", () => {
+  // Herdr clears `agent_status` on exit but keeps reported tokens. If the unread
+  // flag survived, whatever agent starts in this pane next would inherit it and
+  // show a blue unread lamp the user never set.
+  const { pane, calls } = fixture("idle");
+  const tokens = { remark_lamp_unread: "● repo", remark_unread: "1", remark_note: "note" };
+  const bare = { ...pane, agent: undefined, agent_status: "unknown", tokens };
+  herdr.cli = args => {
+    calls.push(args);
+    if (args[1] === "get") return { pane: bare };
+    if (args[1] === "report-metadata") applyMetadata(args, bare);
+    return {};
+  };
+  process.env.HERDR_PLUGIN_EVENT = "pane.exited";
+  process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ pane_id: pane.pane_id });
+  remark.main("event");
+  assert.equal(bare.tokens.remark_unread, undefined);
+  assert.deepEqual(bare.tokens, {});
+});
+
+test("a closed pane during a batch refresh does not abort the remaining panes", () => {
+  const panes = ["w1:p1", "w1:p2", "w1:p3"].map(id => ({ pane_id: id, tab_id: "w1:t1", workspace_id: "w1",
+    cwd: "C:\\work\\repo", agent: "codex", agent_status: "idle", tokens: {} }));
+  const seen = [];
+  herdr.branch = () => "main";
+  herdr.cli = args => {
+    if (args[0] === "tab") return { tabs: [{ tab_id: "w1:t1", label: "Build" }] };
+    if (args[1] === "get") {
+      if (args[2] === "w1:p2") throw Object.assign(Error("no such pane"), { code: "pane_not_found" });
+      seen.push(args[2]);
+      return { pane: panes.find(p => p.pane_id === args[2]) };
+    }
+    return {};
+  };
+  remark.refresh(panes);
+  // p2 is skipped; p3 still refreshes instead of the whole batch dying.
+  assert.deepEqual(seen, ["w1:p1", "w1:p3"]);
+});
+
+test("init reports failed pane reads after refreshing the remaining rows", () => {
+  const { pane } = fixture();
+  const cli = herdr.cli;
+  herdr.cli = args => {
+    if (args[0] === "agent") return { agents: [{ pane_id: "bad" }, pane] };
+    if (args[1] === "get" && args[2] === "bad") throw Error("API unavailable");
+    return cli(args);
+  };
+  assert.throws(() => remark.main("init"), /bad: API unavailable/);
+  assert.equal(pane.tokens.remark_tab, "Build");
+});
+
+test("init fails when every pane read fails", () => {
+  herdr.cli = args => {
+    if (args[0] === "agent") return { agents: [{ pane_id: "p1" }] };
+    throw Error("API unavailable");
+  };
+  assert.throws(() => remark.main("init"), /p1: API unavailable/);
+});
+
+test("reload waits for Herdr's plugin command and propagates its failure", async () => {
+  for (const status of ["succeeded", "failed"]) {
+    const calls = [];
+    herdr.cli = args => {
+      calls.push(args);
+      if (args[1] === "action") return { log: { log_id: "init-1", status: "running" } };
+      return { logs: [{ log_id: "another", status: "succeeded" },
+        { log_id: "init-1", status, stderr: status === "failed" ? "pane refresh failed" : "" }] };
+    };
+    if (status === "failed") await assert.rejects(remark.main("reload"), /pane refresh failed/);
+    else await remark.main("reload");
+    assert.deepEqual(calls[0], ["plugin", "action", "invoke", "refresh", "--plugin", herdr.ID]);
+    assert.equal(calls.length, 2);
+  }
+});
+
+test("toggle renders the accepted unread state after acknowledging completion", () => {
+  const { pane, calls } = fixture("done");
+  assert.equal(remark.toggle(pane), false);
+  assert.ok(calls.some(args => args.join(" ") === "agent focus " + pane.pane_id));
+  // Read the action target and then the accepted state after writing the flag.
+  assert.equal(calls.filter(args => args[1] === "get").length, 3);
+  assert.equal(pane.agent_status, "idle");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+});
+
+test("a background refresh cannot invalidate a delayed manual unread write", () => {
+  const { pane, calls } = fixture();
+  const cli = herdr.cli;
+  let interleaved = false;
+  herdr.cli = args => {
+    if (!interleaved && args.includes("remark_unread=1")) {
+      interleaved = true;
+      remark.update(structuredClone(pane));
+    }
+    return cli(args);
+  };
+  assert.equal(remark.toggle(structuredClone(pane)), true);
+  assert.equal(pane.tokens.remark_unread, "1");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+  assert.ok(calls.some(args => args.includes(READ_SOURCE)));
+});
+
+test("a newer lamp tick does not invalidate text refreshed while Git was running", () => {
+  const { pane } = fixture("working");
+  pane.label = "Current note";
+  herdr.branch = () => {
+    herdr.cli(["pane", "report-metadata", pane.pane_id, "--source", LAMP_SOURCE,
+      "--seq", String(herdr.sequence()), "--clear-token", "remark_lamp_working",
+      "--token", "remark_lamp_working_blink=● repo"]);
+    return "feature/new";
+  };
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_branch, "feature/new");
+  assert.equal(pane.tokens.remark_note, "Current note");
+  assert.equal(pane.tokens.remark_lamp_working_blink, "● repo");
+  assert.equal(pane.tokens.remark_lamp_working, undefined);
+});
+
+test("a batch cannot restore an old Tab name after a rename during Git lookup", () => {
+  const { pane } = fixture();
+  const cli = herdr.cli;
+  let renamed = false;
+  herdr.cli = args => args[0] === "tab"
+    ? { tabs: [{ tab_id: pane.tab_id, label: renamed ? "New" : "Old" }] } : cli(args);
+  herdr.branch = () => {
+    herdr.branch = () => "new-branch";
+    renamed = true;
+    remark.update(structuredClone(pane));
+    return "old-branch";
+  };
+  remark.refresh([structuredClone(pane)]);
+  assert.equal(pane.tokens.remark_tab, "New");
+  assert.equal(pane.tokens.remark_branch, "new-branch");
+});
+
+test("an ordinary state event reads the pane once and refreshes all display fields", () => {
+  const { pane, calls } = fixture("blocked");
+  pane.cwd = "/fresh/project";
+  pane.label = "Current note";
+  herdr.branch = cwd => { assert.equal(cwd, pane.cwd); return "current-branch"; };
+  process.env.HERDR_PLUGIN_EVENT = "pane.agent_status_changed";
+  process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ pane_id: pane.pane_id, cwd: "/old" });
+  remark.main("event");
+  assert.equal(calls.filter(args => args[1] === "get").length, 1);
+  assert.equal(pane.tokens.remark_lamp_blocked, "● project");
+  assert.equal(pane.tokens.remark_tab, "Build");
+  assert.equal(pane.tokens.remark_branch, "current-branch");
+  assert.equal(pane.tokens.remark_note, "Current note");
+});
+
+test("viewing one completion does not mark the next completion as read", () => {
+  const { pane } = fixture("done");
+  pane.state_change_seq = 10;
+  remark.update(pane, false);
+  assert.equal(pane.tokens.remark_seen, "10");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  pane.state_change_seq = 12;
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
 });

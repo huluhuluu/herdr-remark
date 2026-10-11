@@ -40,15 +40,25 @@ Focus the target agent first. The default `prefix` is `Ctrl+B`: press and releas
 | `prefix+u` | Toggle read / unread |
 | `prefix+shift+u` | Edit a note in a small popup |
 
-**Unread:** stays marked while you remain in the agent; leave and return to clear it, or toggle again. Working and blocked states take priority over unread.
+**Unread:** simply staying in the agent keeps the mark. Scroll partway in either direction, leave and return, or toggle again to clear it. Output growth and resizing do not count as reading. A viewed completion shows green `○`; the next completion shows blue `●` again. Working and blocked states take priority over unread.
 
 | State | Light |
 | --- | --- |
-| Working | Yellow `●` |
+| Working | Yellow `●`, pulsing |
 | Blocked / awaiting input | Red `●` |
 | Idle, read | Green `○` |
-| Idle, unread / unseen background completion (`done`) | Blue `●` |
+| Unread (manual mark, or a finished turn) | Blue `●` |
 | Unknown | Gray `·` |
+
+**Working blink:** the yellow light and directory text pulse together, enabled by default. The plugin alternates bright and dim tokens over the API socket. Animation and scroll-to-read share one monitor, which exits when there are no animated working lights or unread panes. Disabling blink leaves a steady yellow light and keeps scroll-to-read available.
+
+To turn it off or change the speed, create `config.json` in this plugin's config directory (`herdr plugin list` prints the path, usually `%APPDATA%\herdr\plugins\config\huluhlu.agent-inform`):
+
+```json
+{ "blink": false, "blink_interval_ms": 400 }
+```
+
+Both keys are optional. `blink_interval_ms` is clamped to 100–60000 and defaults to 800. A running monitor applies changes on its next cycle; run `npm run init` if the monitor has already exited. The pulse needs the dimmed `$remark_lamp_working_blink` token in your sidebar rows — rerun the installer if it is missing.
 
 **Notes:** prefill the existing pane name → agent summary → conversation title. `Enter` saves, empty input + `Enter` clears, and `Ctrl+C` cancels. Notes are limited to 80 Unicode characters and saved as native pane names, replacing any existing custom name.
 
@@ -77,13 +87,14 @@ herdr config check
 herdr server reload-config
 ```
 
-For manual installation or a code update, also run `npm run init` from the checkout. Update with `git pull --ff-only`; rerunning the installer resets shortcuts and colors in its managed block to the example defaults.
+After manual installation or a code update, run `herdr plugin link .`, then `npm run init` from the checkout. The latter invokes Herdr's `refresh` plugin action using the actual plugin directories, waits for initialization to finish, and asks an existing monitor to release its lock and restart with the new code on its next cycle. Update with `git pull --ff-only`; rerunning the installer resets shortcuts and colors in its managed block to the example defaults.
 
 ## Notes
 
+- Normal refreshes only write Remark metadata; the plugin does not scan processes or clear agent authority.
 - Unread marks reset when the Herdr server restarts; notes persist through Herdr.
-- Lights use static Catppuccin colors, without animation or automatic theme matching. Edit `fg` values in the sidebar config to customize them.
-- Git branches refresh on focus and agent events. There is no background polling or native sidebar right-click menu.
+- Lights use static Catppuccin colors, matching no theme automatically. Edit `fg` values in the sidebar config to customize them.
+- Every status refresh resolves the current directory, Tab name and Git branch. Renaming a Tab refreshes all its agents. Animation ticks only update lamps; scroll events use a socket subscription. There is no native sidebar right-click menu.
 - Herdr exposes no event for pane renames, so a pane renamed outside the shortcut (another tool, or a second client) keeps its old note in the sidebar until the next focus or agent event.
 - Windows has been tested; the Bash installer has been checked under Git Bash, but native Linux has not been tested.
 

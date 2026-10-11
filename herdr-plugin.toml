@@ -1,11 +1,17 @@
 id = "huluhlu.agent-inform"
 name = "Remark"
-version = "0.5.3"
+version = "0.6.0"
 min_herdr_version = "0.8.2"
 description = "Two shortcuts: read/unread and a short agent remark"
 platforms = ["windows", "linux", "macos"]
 
 [[startup]]
+command = ["node", "src/remark.js", "init"]
+
+[[actions]]
+id = "refresh"
+title = "Refresh Remark"
+contexts = ["global"]
 command = ["node", "src/remark.js", "init"]
 
 [[actions]]
@@ -38,6 +44,17 @@ command = ["node", "src/remark.js", "event"]
 
 [[events]]
 on = "pane.agent_status_changed"
+command = ["node", "src/remark.js", "event"]
+
+# An agent exiting leaves its last lamp, branch and note behind, because Herdr
+# keeps reported tokens after clearing agent_status. Refresh on exit to clear
+# them instead of showing a stale status forever.
+[[events]]
+on = "pane.exited"
+command = ["node", "src/remark.js", "event"]
+
+[[events]]
+on = "pane.closed"
 command = ["node", "src/remark.js", "event"]
 
 [[events]]

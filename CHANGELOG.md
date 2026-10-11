@@ -1,54 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
-- 批量刷新时每个 Tab 标签和每个工作目录只查询一次，`init` 和 Tab 改名事件少一轮或多轮 CLI 调用。
-- `tab.renamed` 直接使用事件负载里的新标签，不再为每个 Agent 列一次 Tab。
-- 修正未读标记的写入序号，慢速刷新不再可能清掉刚设置的未读状态。
-- 备注和标题清洗时剥离 OSC 等非 CSI 转义序列，避免转义内容显示为可见文本。
-- 插件环境变量不是合法 JSON 时给出可读报错。
-- 安装脚本优先使用 `HERDR_BIN_PATH`；缺少 Node.js 时 PowerShell 输出单行错误。
-- 增加 GitHub Actions 测试矩阵与 `src/herdr.js` 单元测试。
+- Keep two shortcuts for read/unread and popup note editing.
+- Refresh directory, Tab name and Git branch from current pane state; Tab renames refresh all affected agents.
+- Share one monitor between working-light animation and scroll-to-read; disabling animation keeps a steady working light.
+- Track completion reads by turn, and order lamp, text and unread writes independently to prevent stale updates.
+- Retry scroll subscriptions without stopping animation; report initialization failures after refreshing the remaining panes.
+- Reload the monitor through Herdr's plugin environment using `npm run init`.
+- Remove obsolete version migrations and standalone authority-cleanup tooling. Normal refreshes only write Remark metadata.
+- Retain the existing installation scripts and regression tests; no dependencies or build step.
 
-## 0.5.3
-
-- 精简中英 README，增加布局示意图和快捷键改绑示例。
-- 修复慢速刷新覆盖新未读状态或备注的问题。
-- 安装时检查配置重载返回状态；回滚失败配置时保留期间发生的外部编辑。
-- 提供英文 README 与简体中文版，支持双向切换。
-- 新增 Windows PowerShell 与 Linux Bash 安装脚本，共享配置备份、校验和重复安装逻辑。
-- 安装脚本支持 `--check`；遇到非管理区块的布局或快捷键冲突时保留原配置。
-
-## 0.5.2
-
-- 空闲未读改为蓝色实心圆 `●`，空闲已读保留绿色空心圆 `○`。
-
-## 0.5.1
-
-- 灯和目录名合并为同色显示项，中间只留空格；移除独立目录显示项。
-- 保持独立插件，Tab、分支和备注继续独立着色。
-
-## 0.5.0
-
-- 改为一个状态灯，只有空闲未读使用蓝色，不覆盖工作或阻塞状态。
-- 两行显示：灯、目录名、Tab 名；Git 分支、备注。无分支或备注时隐藏。
-- 删除状态文字、额外未读点和旧的状态标签拼接逻辑。
-
-## 0.4.0
-
-- 保留原生状态灯和运行状态，手动未读额外显示绿色灯，重新进入后清除。
-- 第一行收简为状态|Tab 名|Git 分支（若有），第二行仅显示备注 / pane 名称。
-- 备注改为小型 popup 浮层，不创建或切换 pane。
-- 使用一个未读 token，无轮询或状态数据库；升级需同步替换侧边栏配置。
-
-## 0.3.0
-
-- 缩减为两个快捷键：切换 read/unread，编辑简短备注。
-- 复用 Herdr state_text 的原生状态颜色，聚焦时清除手动未读。
-- 备注默认填入会话摘要或标题，保存为原生 pane 名称。
-- 移除收件箱、通知、排序、自定义 token 展示及插件持久状态。
-- 保留原插件 ID；仓库改名为 herdr-remark。
-
-## 0.2.0
-
-旧版 Agent Inform：独立的未读标记、备注、收件箱和通知。
+Earlier changes remain in [Git history](https://github.com/huluhuluu/herdr-remark/commits/main/).

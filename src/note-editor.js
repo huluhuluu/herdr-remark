@@ -21,6 +21,4 @@ async function edit() {
 edit().catch(e => {
   process.stderr.write("remark: " + e.message + "\n");
   process.exitCode = 1;
-  // Leave errors visible; successful saves close immediately.
-  setTimeout(() => {}, 2500);
 });

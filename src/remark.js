@@ -1,73 +1,73 @@
 "use strict";
 
 const herdr = require("./herdr");
-const path = require("node:path");
-const LAMPS = { working: "●", blocked: "●", idle: "○", unread: "●", unknown: "·" };
-
-function clean(text) {
-  return Array.from(String(text || "")
-    // OSC (ESC ] ... BEL or ST) carries no visible text; strip it before the
-    // generic control-character pass would turn its payload into visible junk.
-    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\|$)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    // Other two-character escapes (ESC ( ) * + # % and single-letter ones).
-    .replace(/\x1b[@-Z\\\[\]_()*+#%\-]?/g, "")
-    .replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim())
-    .slice(0, 80).join("");
-}
+const blink = require("./blink");
+const { clean, directory } = require("./text");
+const { DATA_SOURCE, LAMP_SOURCE, READ_SOURCE, DATA_TOKENS, READ_TOKENS,
+  stateOf, lampTokens, readTokens } = require("./tokens");
 
 function initialNote(pane) {
-  return clean(pane.label || pane.tokens?.summary || pane.terminal_title_stripped ||
-    pane.title || "");
+  return clean(pane.label || pane.tokens?.summary || pane.terminal_title_stripped || pane.title || "");
 }
 
-function directory(cwd = "") {
-  const parser = cwd.includes("\\") || /^[A-Za-z]:/.test(cwd) ? path.win32 : path.posix;
-  return clean(parser.basename(cwd) || parser.parse(cwd).root);
+function readPane(id) {
+  const pane = herdr.cli(["pane", "get", id]).pane;
+  // Only agent.list exposes the completion generation. Remember which turn was
+  // viewed rather than treating all future completions as read.
+  if (pane?.agent_status === "done") {
+    const agent = (herdr.cli(["agent", "list"]).agents || []).find(item =>
+      item.pane_id === id && item.terminal_id === pane.terminal_id && item.agent_status === "done");
+    if (agent) pane.state_change_seq = agent.state_change_seq;
+  }
+  return pane;
 }
 
-function update(pane, unread, known = {}) {
-  // Herdr hooks run in separate processes. A system monotonic timestamp orders
-  // refreshes even when a rename does not increment the pane's revision. The
-  // unread write shares it: an unsequenced report would let a stale focus event
-  // clear a flag the user just set. Both reports need distinct sequences,
-  // because Herdr ignores a report whose sequence equals the last accepted one.
-  const seq = process.hrtime.bigint();
-  // Only explicit user/focus actions write the unread flag. Background refreshes
-  // must not restore a flag from an older snapshot while Git is running.
-  if (unread !== undefined) herdr.cli(["pane", "report-metadata", pane.pane_id,
-    "--source", "plugin:" + herdr.ID, "--seq", seq.toString(),
-    ...(unread ? ["--token", "remark_unread=1"] : ["--clear-token", "remark_unread"])]);
-  // Batched callers pass what they already fetched for the whole batch; `??`
-  // keeps a legitimately empty label or branch from triggering a second lookup.
-  const branch = clean(known.branch ?? herdr.branch(pane.cwd));
-  const tabLabel = known.tabLabel ?? herdr.cli(["tab", "list", "--workspace", pane.workspace_id])
-    .tabs?.find(item => item.tab_id === pane.tab_id)?.label;
-  pane = herdr.cli(["pane", "get", pane.pane_id]).pane;
-  unread = !!pane.tokens?.remark_unread;
-  const state = pane.agent_status === "done" || (pane.agent_status === "idle" && unread)
-    ? "unread" : Object.hasOwn(LAMPS, pane.agent_status) ? pane.agent_status : "unknown";
-  const tokens = {
-    remark_tab: clean(tabLabel),
-    remark_branch: branch,
-    remark_note: clean(pane.label),
-  };
-  const folder = directory(pane.cwd);
-  for (const [key, icon] of Object.entries(LAMPS))
-    tokens["remark_lamp_" + key] = key === state ? [icon, folder].filter(Boolean).join(" ") : "";
-  // Lamp and directory share one colored token, avoiding Herdr's separator.
-  // Publish the sequence even if tokens match, to invalidate older pending writes.
-  herdr.cli(["pane", "report-metadata", pane.pane_id, "--source", "plugin:" + herdr.ID,
-    "--clear-state-labels", "--seq", (seq + 1n).toString(),
-    ...Object.entries(tokens).flatMap(([k, v]) => v ? ["--token", k + "=" + v] : ["--clear-token", k])]);
+function report(id, source, seq, tokens) {
+  herdr.cli(["pane", "report-metadata", id, "--source", source, "--seq", String(seq),
+    ...Object.entries(tokens).flatMap(([key, value]) => value == null || value === ""
+      ? ["--clear-token", key] : ["--token", key + "=" + value])]);
+}
+
+// Resolve the current pane, Git branch and Tab label on every refresh. Events
+// and earlier batch snapshots identify the target, not its display values.
+function update(pane, unread) {
+  let seq = herdr.sequence();
+  let live;
+  try { live = readPane(pane.pane_id); }
+  catch (error) { if (error.code === "pane_not_found") return false; throw error; }
+  if (!live) return false;
+  if (live.agent && unread !== undefined) {
+    report(live.pane_id, READ_SOURCE, seq, readTokens(live, unread));
+    // Render the accepted state, even if this action lost to a newer action.
+    seq = herdr.sequence();
+    try { live = readPane(pane.pane_id); }
+    catch (error) { if (error.code === "pane_not_found") return false; throw error; }
+    if (!live) return false;
+  }
+  if (!live.agent) {
+    report(live.pane_id, READ_SOURCE, seq, Object.fromEntries(READ_TOKENS.map(key => [key, null])));
+    report(live.pane_id, DATA_SOURCE, seq, Object.fromEntries(DATA_TOKENS.map(key => [key, null])));
+    report(live.pane_id, LAMP_SOURCE, seq, lampTokens(live));
+    return true;
+  }
+  const branch = clean(herdr.branch(live.cwd));
+  const tab = herdr.cli(["tab", "list", "--workspace", live.workspace_id])
+    .tabs?.find(item => item.tab_id === live.tab_id);
+  report(live.pane_id, DATA_SOURCE, seq, {
+    remark_tab: clean(tab?.label), remark_branch: branch, remark_note: clean(live.label),
+  });
+  report(live.pane_id, LAMP_SOURCE, seq, lampTokens(live));
+  if (live.agent_status === "working" || live.tokens?.remark_unread || stateOf(live) === "unread") {
+    try { blink.start(process.env, !!live.tokens?.remark_unread || stateOf(live) === "unread"); }
+    catch { /* the next event can start the monitor again */ }
+  }
+  return true;
 }
 
 function toggle(pane) {
-  const unread = !(pane.tokens?.remark_unread || pane.agent_status === "done");
-  if (!unread && pane.agent_status === "done") {
-    herdr.cli(["agent", "focus", pane.pane_id]);
-    pane = herdr.cli(["pane", "get", pane.pane_id]).pane;
-  }
+  if (pane.agent_status === "done") pane = readPane(pane.pane_id) || pane;
+  const unread = !(pane.tokens?.remark_unread || stateOf(pane) === "unread");
+  if (!unread && pane.agent_status === "done") herdr.cli(["agent", "focus", pane.pane_id]);
   update(pane, unread);
   return unread;
 }
@@ -75,26 +75,36 @@ function toggle(pane) {
 function saveNote(terminalId, note) {
   const pane = herdr.paneForTerminal(terminalId);
   const value = clean(note);
-  // Native names persist and follow a terminal when its pane moves.
   // Herdr trims names; a leading space keeps a literal '--clear' from being an option.
   herdr.cli(["pane", "rename", pane.pane_id, value ? " " + value : "--clear"]);
   update(pane);
 }
 
-function refresh(panes, known = {}) {
-  if (!panes.length) return;
-  // A tab or Git lookup costs about as much as a Herdr round trip, so fetch each
-  // distinct one once per batch instead of once per pane. An unlabeled tab maps
-  // to "" rather than undefined, which would trigger a per-pane fallback lookup.
-  const tabs = known.tabLabel === undefined
-    ? new Map((herdr.cli(["tab", "list"]).tabs || []).map(tab => [tab.tab_id, tab.label]))
-    : null;
-  const branches = new Map();
+function refresh(panes) {
+  const failures = [];
   for (const pane of panes) {
-    if (!branches.has(pane.cwd)) branches.set(pane.cwd, herdr.branch(pane.cwd));
-    update(pane, undefined, { branch: branches.get(pane.cwd),
-      tabLabel: known.tabLabel ?? tabs.get(pane.tab_id) ?? "" });
+    try { update(pane); }
+    catch (error) {
+      if (error.code !== "pane_not_found") failures.push(`${pane.pane_id}: ${error.message}`);
+    }
   }
+  if (failures.length) throw new Error(failures.join("\n"));
+}
+
+// Let Herdr supply its actual plugin paths. Wait for the command result so an
+// asynchronous action invocation cannot make a failed initialization look OK.
+async function reload() {
+  let { log } = herdr.cli(["plugin", "action", "invoke", "refresh", "--plugin", herdr.ID]);
+  const id = log.log_id;
+  const deadline = Date.now() + 25000;
+  while (log.status === "running") {
+    if (Date.now() >= deadline) throw new Error(`初始化超时；查看 herdr plugin log list --plugin ${herdr.ID}`);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    log = herdr.cli(["plugin", "log", "list", "--plugin", herdr.ID, "--limit", "100"])
+      .logs?.find(item => item.log_id === id);
+    if (!log) throw new Error(`找不到初始化日志：${id}`);
+  }
+  if (log.status !== "succeeded") throw new Error(log.stderr || log.error || `初始化失败：${log.status}`);
 }
 
 function event() {
@@ -103,25 +113,23 @@ function event() {
   const name = process.env.HERDR_PLUGIN_EVENT || envelope.event;
   if (name === "tab.renamed") {
     const tabId = data.tab_id || data.tab?.tab_id;
-    // The payload already carries the new label, so the batch needs no tab lookup.
-    // A payload without a label field falls back to the shared tab lookup.
-    const panes = (herdr.cli(["agent", "list"]).agents || []).filter(pane => pane.tab_id === tabId);
-    refresh(panes, Object.hasOwn(data, "label") ? { tabLabel: data.label ?? "" } : {});
+    refresh((herdr.cli(["agent", "list"]).agents || []).filter(pane => pane.tab_id === tabId));
     return;
   }
   const id = data.pane_id || data.pane?.pane_id;
-  if (!id) return;
-  const pane = herdr.cli(["pane", "get", id]).pane;
-  if (!pane?.agent) return;
-  update(pane, name === "pane.focused" ? false : undefined);
+  if (id) update({ pane_id: id }, name === "pane.focused" ? false : undefined);
 }
 
 function main(command = process.argv[2]) {
+  if (command === "reload") return reload();
   if (command === "init") {
+    blink.requestReload();
     refresh(herdr.cli(["agent", "list"]).agents || []);
     return;
   }
-  if (command === "event") return event();
+  if (command === "event") {
+    return event();
+  }
   const pane = herdr.target();
   if (command === "toggle-unread") {
     process.stdout.write((toggle(pane) ? "unread" : "read") + ": " + pane.pane_id + "\n");
@@ -133,10 +141,10 @@ function main(command = process.argv[2]) {
 }
 
 if (require.main === module) {
-  try { main(); } catch (e) {
+  Promise.resolve().then(() => main()).catch(e => {
     process.stderr.write("remark: " + e.message + "\n");
     process.exitCode = 1;
-  }
+  });
 }
 
-module.exports = { clean, initialNote, directory, update, toggle, saveNote, main };
+module.exports = { clean, initialNote, directory, stateOf, update, toggle, saveNote, refresh, main };

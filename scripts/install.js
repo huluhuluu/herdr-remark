@@ -59,6 +59,7 @@ function install({ target = configPath(), check = false, execute = run, bin = pr
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const staged = `${target}.remark-check-${process.pid}.toml`;
   let backup;
+  let warning;
   fs.writeFileSync(staged, merged, { flag: "wx", mode: original ? fs.statSync(target).mode & 0o777 : 0o600 });
   try {
     execute(bin, ["config", "check"], { HERDR_CONFIG_PATH: staged });
@@ -88,8 +89,16 @@ function install({ target = configPath(), check = false, execute = run, bin = pr
       }
       throw Error(`Reload failed; previous config restored. The plugin remains linked. ${error.message}`);
     }
-    execute(process.execPath, [path.join(ROOT, "src", "remark.js"), "init"]);
-    return { target, backup, checked: false };
+    // The config is written and the plugin is linked at this point, so a failed
+    // initialization must not read as a failed install: report it as a warning
+    // and tell the user what to rerun, instead of leaving them to reinstall.
+    try {
+      execute(process.execPath, [path.join(ROOT, "src", "remark.js"), "reload"]);
+      warning = undefined;
+    } catch (error) {
+      warning = `Installed and linked, but sidebar initialization failed (${error.message}). Rerun: npm run init`;
+    }
+    return { target, backup, checked: false, warning };
   } finally {
     if (fs.existsSync(staged)) fs.unlinkSync(staged);
   }
@@ -100,8 +109,11 @@ if (require.main === module) {
     const args = process.argv.slice(2);
     if (args.some(arg => arg !== "--check")) throw Error("Usage: install [--check]");
     const result = install({ check: args.includes("--check") });
-    console.log(`${result.checked ? "Config check passed" : "Remark installed and initialized"}: ${result.target}`);
+    const what = result.checked ? "Config check passed"
+      : result.warning ? "Remark installed and linked" : "Remark installed and initialized";
+    console.log(`${what}: ${result.target}`);
     if (result.backup) console.log(`Config backup: ${result.backup}`);
+    if (result.warning) console.warn(`Warning: ${result.warning}`);
     if (!result.checked) console.log(`Keep this linked checkout: ${ROOT}`);
   } catch (error) {
     console.error("remark install: " + error.message);

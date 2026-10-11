@@ -6,16 +6,28 @@ const { spawnSync } = require("node:child_process");
 // Keep the installed id so existing keybindings and linked installs still work.
 const ID = process.env.HERDR_PLUGIN_ID || "huluhlu.agent-inform";
 
+// CLI and socket writers stamp the same clock before reading their snapshots.
+const sequence = () => Number(process.hrtime.bigint());
+
 function cli(args) {
-  const res = spawnSync(process.env.HERDR_BIN_PATH || "herdr", args, {
+  const bin = process.env.HERDR_BIN_PATH || "herdr";
+  const res = spawnSync(bin, args, {
     encoding: "utf8", windowsHide: true, timeout: 10000,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  // A missing binary reports no status and empty output, so name the real
+  // problem instead of surfacing a raw ENOENT or a later, unrelated error.
+  if (res.error?.code === "ENOENT")
+    throw new Error(`找不到 herdr 可执行文件（${bin}）。请将 herdr 加入 PATH，或设置 HERDR_BIN_PATH。`);
+  if (res.error?.code === "ETIMEDOUT")
+    throw new Error(`herdr 未在超时时间内响应：${args[0]} ${args[1] || ""}`.trim());
   let body;
   try { body = JSON.parse((res.stdout || res.stderr || "").trim()); } catch {}
   if (res.error || res.status !== 0 || body?.error) {
-    throw new Error(res.error?.message || body?.error?.message ||
+    const error = new Error(res.error?.message || body?.error?.message ||
       (res.stderr || "").trim() || 'herdr exited with ' + res.status);
+    error.code = body?.error?.code || res.error?.code;
+    throw error;
   }
   return body?.result || {};
 }
@@ -61,4 +73,4 @@ function openEditor(pane, initial) {
   ]);
 }
 
-module.exports = { ID, cli, envJson, target, paneForTerminal, branch, openEditor };
+module.exports = { ID, sequence, cli, envJson, target, paneForTerminal, branch, openEditor };

@@ -27,8 +27,8 @@ test("cli returns the result body and reports Herdr failures verbatim", () => {
   assert.equal(herdr.cli([ok]).pane.pane_id, "w1:p1");
 
   const failed = stub("failed.js",
-    'process.stdout.write(JSON.stringify({ error: { message: "unknown pane" } })); process.exit(1);');
-  assert.throws(() => herdr.cli([failed]), /unknown pane/);
+    'process.stdout.write(JSON.stringify({ error: { code: "pane_not_found", message: "unknown pane" } })); process.exit(1);');
+  assert.throws(() => herdr.cli([failed]), { code: "pane_not_found", message: "unknown pane" });
 
   // A crashed binary prints no JSON, so the raw stderr is the only useful text.
   const crashed = stub("crashed.js", 'process.stderr.write("panic: bad state"); process.exit(2);');
@@ -51,4 +51,9 @@ test("envJson treats a missing variable as empty and names a malformed one", () 
 test("branch is empty without a directory and outside a repository", () => {
   assert.equal(herdr.branch(""), "");
   assert.equal(herdr.branch(dir), "");
+});
+
+test("a missing herdr binary names HERDR_BIN_PATH instead of leaking ENOENT", () => {
+  process.env.HERDR_BIN_PATH = path.join(dir, "definitely-missing-binary");
+  assert.throws(() => herdr.cli(["pane", "list"]), /找不到 herdr 可执行文件.*HERDR_BIN_PATH/);
 });
