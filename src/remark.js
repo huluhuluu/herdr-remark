@@ -21,6 +21,7 @@ function readPane(id) {
       item.pane_id === id && item.terminal_id === pane.terminal_id);
     if (agent) {
       pane.agent_status = agent.agent_status;
+      pane.focused = agent.focused;
       pane.state_change_seq = agent.state_change_seq;
       pane.completion_seq = agent.completion_seq;
       pane.tokens = agent.tokens;
@@ -129,7 +130,7 @@ function event() {
       .tabs?.find(item => item.tab_id === tabId);
     // An older rename may be delivered after another rename. It still refreshes
     // metadata, but must not acknowledge the current name's unread state.
-    refresh(panes, typeof data.label === "string" && data.label === tab?.label ? false : undefined);
+    refresh(panes, tab && typeof data.label === "string" && data.label === (tab.label ?? "") ? false : undefined);
     return;
   }
   const id = data.pane_id || data.pane?.pane_id;

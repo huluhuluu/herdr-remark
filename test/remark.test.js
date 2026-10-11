@@ -324,6 +324,31 @@ test("a late focus hook for a pane that is no longer focused only refreshes meta
   assert.equal(pane.tokens.remark_lamp_unread, "● repo");
 });
 
+test("clearing a Tab label acknowledges its agents", () => {
+  const { pane } = fixture();
+  const cli = herdr.cli;
+  herdr.cli = args => args[0] === "tab" ? { tabs: [{ tab_id: pane.tab_id }] } : cli(args);
+  remark.update(pane, true);
+  process.env.HERDR_PLUGIN_EVENT = "tab.renamed";
+  process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: pane.tab_id, label: "" } });
+  remark.main("event");
+  assert.equal(pane.tokens.remark_unread, undefined);
+  assert.equal(pane.tokens.remark_tab, undefined);
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+});
+
+test("a focus hook uses the newer agent snapshot when focus changes between reads", () => {
+  const { pane } = fixture();
+  remark.update(pane, true);
+  const mark = pane.tokens.remark_unread;
+  const cli = herdr.cli;
+  herdr.cli = args => args[0] === "agent" ? { agents: [{ ...pane, focused: false }] } : cli(args);
+  process.env.HERDR_PLUGIN_EVENT = "pane.focused";
+  process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { pane_id: pane.pane_id } });
+  remark.main("event");
+  assert.equal(pane.tokens.remark_unread, mark);
+});
+
 test("active-tab idle completions turn blue for each observed round on older Herdr", () => {
   for (const agent of ["codex", "dst", "claude"]) {
     const { pane } = fixture("working");
