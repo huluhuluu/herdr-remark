@@ -350,7 +350,7 @@ test("a focus hook uses the newer agent snapshot when focus changes between read
 });
 
 test("active-tab idle completions turn blue for each observed round on older Herdr", () => {
-  for (const agent of ["codex", "dst", "claude"]) {
+  for (const agent of ["codex", "dsh-tui", "dst", "claude", "opencode", "copilot", "custom-agent"]) {
     const { pane } = fixture("working");
     pane.agent = agent;
     pane.state_change_seq = 10;
@@ -389,6 +389,25 @@ test("native completion_seq is independent of native seen state and state_change
   remark.update(pane);
   assert.equal(pane.tokens.remark_lamp_unread, "● repo");
   assert.ok(calls.every(args => args[1] !== "focus"));
+});
+
+test("native completion tracking, notes and manual unread use no Agent name whitelist", () => {
+  for (const name of ["codex", "dsh-tui", "dst", "claude", "opencode", "copilot", "custom-agent"]) {
+    const { pane, calls } = fixture("idle");
+    Object.assign(pane, { agent: name, state_change_seq: 10, completion_seq: 9 });
+    remark.update(pane);
+    assert.equal(pane.tokens.remark_lamp_unread, "● repo", name);
+    herdr.paneForTerminal = () => pane;
+    remark.saveNote(pane.terminal_id, "reviewed");
+    assert.equal(pane.tokens.remark_lamp_idle, "○ repo", name);
+    assert.equal(pane.tokens.remark_note, "reviewed", name);
+    remark.toggle(pane);
+    assert.equal(pane.tokens.remark_lamp_unread, "● repo", name);
+    pane.agent_status = "blocked";
+    remark.update(pane);
+    assert.equal(pane.tokens.remark_lamp_blocked, "● repo", name);
+    assert.ok(calls.every(args => !["focus", "report-agent", "clear-agent"].includes(args[1])));
+  }
 });
 
 test("idle alone and a replaced terminal do not invent a completion", () => {

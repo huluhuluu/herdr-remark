@@ -53,6 +53,21 @@ test("unmatched terminal content cannot acknowledge a pane", async () => {
   assert.equal(await wheel.target(event, new Map([["p2", agent()]]), async () => false, {}), undefined);
 });
 
+test("wheel verification is independent of Agent names and native completion_seq availability", async () => {
+  for (const name of ["codex", "dsh-tui", "dst", "claude", "opencode", "copilot", "custom-agent"]) {
+    for (const nativeCompletion of [true, false]) {
+      const watched = { ...agent(), agent: name };
+      if (!nativeCompletion) delete watched.completion_seq;
+      fixture(structuredClone(watched));
+      const result = await wheel.target(event, new Map([["p2", watched]]), async request => {
+        assert.equal(request.agent, undefined); // The native helper only sees geometry and text.
+        return true;
+      }, {});
+      assert.equal(result, watched, name);
+    }
+  }
+});
+
 test("a wheel captured against an older round, terminal or manual mark cannot clear a newer one", async () => {
   for (const patch of [{ state_change_seq: 43 }, { completion_seq: 41 }, { terminal_id: "replacement" },
     { tokens: { remark_unread: "101" } }]) {

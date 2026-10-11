@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.3
+
+- Confirm Windows Terminal scroll-to-read works in the existing Herdr 0.9.1 environment. No additional Agents were installed.
+- Extend Agent-independent API regression coverage to Codex, Claude Code, DST/`dsh-tui`, OpenCode, Copilot and custom Agent names, with and without native `completion_seq`.
+- Make the shell installer POSIX-compatible and independent of `CDPATH`; test paths containing spaces, argument forwarding and exit-code propagation. Add macOS config-path checks.
+- Extend the existing Windows/macOS/Linux CI matrix to Node.js 24 while retaining 18/20/22.
+- Reorganize both READMEs around installation, Agent/host compatibility, usage, configuration, updating and troubleshooting. Explicitly distinguish cross-platform core behavior from Windows Terminal fullscreen wheel support.
+
 ## 0.6.2
 
 - Add an experimental passive Windows Terminal wheel listener to the existing unread monitor. Match actual focused-pane content and geometry using public Herdr APIs and Windows UI Automation; keep public scrollback detection on other hosts/platforms.

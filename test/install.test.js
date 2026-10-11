@@ -5,14 +5,32 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { configPath, mergeConfig, install } = require("../scripts/install");
 const example = fs.readFileSync(path.join(__dirname, "..", "config.example.toml"), "utf8");
 
-test("config paths follow Windows, Linux and Herdr overrides", () => {
+test("config paths follow Windows, macOS, Linux and Herdr overrides", () => {
   assert.equal(configPath({ APPDATA: "C:/profile/Roaming" }, "win32"), path.resolve("C:/profile/Roaming/herdr/config.toml"));
   assert.equal(configPath({ HOME: "/home/user" }, "linux"), path.resolve("/home/user/.config/herdr/config.toml"));
+  assert.equal(configPath({ HOME: "/Users/user" }, "darwin"), path.resolve("/Users/user/.config/herdr/config.toml"));
+  assert.equal(configPath({ HOME: "/Users/user", XDG_CONFIG_HOME: "/custom" }, "darwin"), path.resolve("/custom/herdr/config.toml"));
+  assert.equal(configPath({ HERDR_CONFIG_PATH: "/active.toml", XDG_CONFIG_HOME: "/ignored" }, "darwin"), path.resolve("/active.toml"));
   assert.equal(configPath({ XDG_CONFIG_HOME: "/custom", APPDATA: "C:/ignored" }, "win32"), path.resolve("/custom/herdr/config.toml"));
   assert.equal(configPath({ HERDR_CONFIG_PATH: "/custom/config.toml" }, "linux"), path.resolve("/custom/config.toml"));
+});
+
+test("POSIX installer preserves spaced paths and arguments with CDPATH set", { skip: process.platform === "win32" }, t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remark shell test "));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const scripts = path.join(dir, "scripts");
+  fs.mkdirSync(scripts);
+  fs.copyFileSync(path.join(__dirname, "../scripts/install.sh"), path.join(scripts, "install.sh"));
+  fs.writeFileSync(path.join(scripts, "install.js"), 'console.log(JSON.stringify(process.argv.slice(2))); process.exitCode = 7;');
+  const result = spawnSync("/bin/sh", ["scripts/install.sh", "--check", "two words"], {
+    cwd: dir, env: { ...process.env, CDPATH: dir }, encoding: "utf8", timeout: 5000,
+  });
+  assert.equal(result.status, 7, result.stderr || result.error?.message);
+  assert.deepEqual(JSON.parse(result.stdout), ["--check", "two words"]);
 });
 
 test("managed config updates are idempotent and preserve unrelated CRLF settings", () => {
