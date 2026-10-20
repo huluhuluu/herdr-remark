@@ -8,7 +8,8 @@ const herdr = require("./herdr");
 const settings = require("./settings");
 const socket = require("./socket");
 const wheel = require("./wheel");
-const { LAMP_SOURCE, READ_SOURCE, stateOf, lampTokens, readTokens } = require("./tokens");
+const monitorLock = require("./monitor-lock");
+const { LAMP_SOURCE, READ_SOURCE, isUnread, lampTokens, readTokens, scrollBaseline } = require("./tokens");
 
 // Herdr token styles are static: fg, bold and dim are fixed per token in
 // config.toml, and there is no per-frame event a plugin can hook. A
@@ -16,12 +17,8 @@ const { LAMP_SOURCE, READ_SOURCE, stateOf, lampTokens, readTokens } = require(".
 // a working agent's yellow lamp pulses between two tokens: the bright
 // `remark_lamp_working` and a dimmed twin. Alternating tokens rather than
 // glyphs keeps the directory text in place and uses Herdr's own dim style.
-const ON = "remark_lamp_working";
-const OFF = "remark_lamp_working_blink";
-// The event hook and monitor share the lamp source and full lamp renderer.
-// Neither can leave half of an old state behind or invalidate text/user writes.
-const SOURCE = LAMP_SOURCE;
 const IDLE_TICKS_BEFORE_EXIT = 2;
+const WHEEL_RETRY_MS = 5000;
 
 function stateDir(env = process.env) {
   return env.HERDR_PLUGIN_STATE_DIR ||
@@ -32,51 +29,24 @@ function lockFile(env = process.env) {
   return path.join(stateDir(env), "blink.lock");
 }
 
-function alive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return error.code === "EPERM"; }
-}
-
 function lockOwner(env = process.env) {
-  try { return Number(fs.readFileSync(lockFile(env), "utf8").trim()) || 0; }
-  catch { return 0; }
+  return monitorLock.owner(lockFile(env));
 }
 
-// Only one daemon may drive the lamps, or two of them would fight over the
-// phase and the lamp would look steady instead of blinking. `wx` makes claiming
-// atomic; a lock left by a dead process is taken over.
 function claim(env = process.env) {
-  const file = lockFile(env);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      fs.writeFileSync(file, String(process.pid), { flag: "wx" });
-      return true;
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      const owner = lockOwner(env);
-      if (alive(owner)) return false;
-      // A contender can see the exclusive file before its PID has been written.
-      if (!owner && Date.now() - fs.statSync(file).mtimeMs < 5000) return false;
-      fs.rmSync(file, { force: true });
-    }
-  }
-  return false;
+  return monitorLock.claim(lockFile(env));
 }
 
 function release(env = process.env) {
-  const file = lockFile(env);
-  if (lockOwner(env) === process.pid) fs.rmSync(file, { force: true });
+  monitorLock.release(lockFile(env));
 }
 
 function running(env = process.env) {
-  const owner = lockOwner(env);
-  return alive(owner);
+  return lockOwner(env) !== 0;
 }
 
-function reloadStamp(env) {
-  try { return fs.readFileSync(path.join(stateDir(env), "blink.reload"), "utf8"); }
+function stamp(env, name) {
+  try { return fs.readFileSync(path.join(stateDir(env), "blink." + name), "utf8"); }
   catch (error) { if (error.code === "ENOENT") return ""; throw error; }
 }
 
@@ -121,8 +91,8 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function run(env = process.env) {
   if (!env.HERDR_SOCKET_PATH) return;
-  const loadedStamp = reloadStamp(env);
-  if (!claim(env)) return;
+  const loadedStamp = stamp(env, "reload");
+  if (!await claim(env)) return;
   const options = { socketPath: env.HERDR_SOCKET_PATH };
   let on = true;
   let idle = 0;
@@ -131,7 +101,9 @@ async function run(env = process.env) {
   const positions = new Map();
   let subscription;
   let wheelMonitor;
+  let wheelRetryAt = 0;
   let reload = false;
+  let observedWake = stamp(env, "wake");
   let pending = Promise.resolve();
   const reading = new Set();
   const queueRead = (agent, seq, fresh = false) => {
@@ -159,7 +131,8 @@ async function run(env = process.env) {
   };
   try {
     for (;;) {
-      if (reloadStamp(env) !== loadedStamp) { reload = true; break; }
+      if (stamp(env, "reload") !== loadedStamp) { reload = true; break; }
+      observedWake = stamp(env, "wake");
       const config = settings.load(env);
       const seq = herdr.sequence();
       const agents = (await socket.request("agent.list", {}, options)).agents || [];
@@ -172,17 +145,27 @@ async function run(env = process.env) {
         const animating = config.blink && agent.agent_status === "working";
         try {
           await socket.request("pane.report_metadata", {
-            pane_id: paneId, source: SOURCE, seq, tokens: lampTokens(agent, animating ? on : true),
+            pane_id: paneId, source: LAMP_SOURCE, seq, tokens: lampTokens(agent, animating ? on : true),
           }, options);
           if (!animating) touched.delete(paneId);
         } catch { /* retry from a fresh snapshot on the next tick */ }
       }
-      const unread = new Map(agents.filter(agent => agent.tokens?.remark_unread || stateOf(agent) === "unread")
+      const unread = new Map(agents.filter(isUnread)
         .map(agent => [agent.pane_id, agent]));
-      const changed = unread.size !== watched.size || [...unread.keys()].some(id => !watched.has(id));
+      // Hooks can publish the round's baseline after our first poll. Reconcile
+      // changed generations/marks even when the subscribed pane ids stay the same.
+      const changed = unread.size !== watched.size || [...unread].some(([id, agent]) => {
+        const previous = watched.get(id);
+        return !previous || previous.terminal_id !== agent.terminal_id ||
+          previous.tokens?.remark_activity !== agent.tokens?.remark_activity ||
+          previous.tokens?.remark_unread !== agent.tokens?.remark_unread;
+      });
       watched = unread;
-      if (watched.size && config.wheelRead !== false && !wheelMonitor)
+      if (wheelMonitor?.closed) wheelMonitor = undefined;
+      if (watched.size && config.wheelRead !== false && !wheelMonitor && Date.now() >= wheelRetryAt) {
+        wheelRetryAt = Date.now() + WHEEL_RETRY_MS;
         wheelMonitor = wheel.start(() => watched, queueRead, error => record(error, env), env);
+      }
       if ((!watched.size || config.wheelRead === false) && wheelMonitor) {
         wheelMonitor.close();
         wheelMonitor = undefined;
@@ -198,9 +181,7 @@ async function run(env = process.env) {
               const agent = watched.get(pane.pane_id);
               if (!agent) continue;
               positions.set(pane.pane_id, pane.scroll);
-              let initial;
-              try { initial = JSON.parse(agent.tokens?.remark_scroll || "null"); } catch { /* old token */ }
-              if (scrolled(initial, pane.scroll)) queueRead(agent, seq);
+              if (scrolled(scrollBaseline(agent), pane.scroll)) queueRead(agent, seq);
             }
             subscription = socket.subscribe([...watched.keys()].map(pane_id =>
               ({ type: "pane.scroll_changed", pane_id })), event => {
@@ -241,14 +222,16 @@ async function run(env = process.env) {
         for (const paneId of touched) {
           const pane = agents.find(agent => agent.pane_id === paneId) || { pane_id: paneId };
           try { await socket.request("pane.report_metadata", {
-            pane_id: paneId, source: SOURCE, seq, tokens: lampTokens(pane),
+            pane_id: paneId, source: LAMP_SOURCE, seq, tokens: lampTokens(pane),
           }, options); } catch { /* pane closed or server gone */ }
         }
       }
     } catch { /* a later event refreshes lamps when the server is reachable */ }
     release(env);
   }
-  if (reload) module.exports.start(env, true);
+  // A start request can arrive after the last snapshot but before release.
+  // Read its stamp after unlocking: later requests can start a monitor directly.
+  if (reload || stamp(env, "wake") !== observedWake) module.exports.start(env, true);
 }
 
 // One monitor handles both animation and scroll-to-read; it exits when neither
@@ -260,8 +243,10 @@ function start(env = process.env, watchUnread = false) {
   // the monitor instead of creating a second lock/daemon in a temporary folder.
   if (!env.HERDR_SOCKET_PATH || !env.HERDR_PLUGIN_STATE_DIR) return false;
   if (!settings.load(env).blink && !watchUnread) return false;
-  if (running(env)) return false;
   try {
+    fs.mkdirSync(stateDir(env), { recursive: true });
+    fs.writeFileSync(path.join(stateDir(env), "blink.wake"), String(herdr.sequence()));
+    if (running(env)) return false;
     const child = spawn(process.execPath, [path.join(__dirname, "blink.js")], {
       detached: true, stdio: "ignore", windowsHide: true, env,
     });
@@ -281,5 +266,5 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ON, OFF, SOURCE, stateDir, lockFile, alive, lockOwner, claim, release, running,
-  lampTokens, scrolled, acknowledge, requestReload, start, run };
+module.exports = { stateDir, lockFile, lockOwner, claim, release, running,
+  scrolled, acknowledge, requestReload, start, run };

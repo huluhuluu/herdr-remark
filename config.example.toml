@@ -21,10 +21,6 @@ rows = [
 
 # Blink is on by default. To change it, write config.json in this plugin's
 # config directory (see README): {"blink": false} or {"blink_interval_ms": 400}.
-#
-# Stale-row cleanup is on by default too. It clears a pane's agent only when the
-# OS process tree shows no descendants, after rechecking the agent and shell:
-# {"reap": false} or {"reap_interval_ms": 120000}.
 
 [[keys.command]]
 key = "prefix+u"

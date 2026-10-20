@@ -105,7 +105,7 @@ function start(getWatched, onRead, onError, env = process.env) {
       .then(agent => { if (!closed && agent) onRead(agent, seq); })
       .catch(onError).finally(() => { busy = false; });
   });
-  return { close };
+  return { close, get closed() { return closed; } };
 }
 
 module.exports = { anchors, target, verifyHost, start };

@@ -90,6 +90,10 @@ Focus the target Agent. The default `prefix` is `Ctrl+B`: press and release it, 
 
 Every observed completed turn starts **blue**, including in the current Tab. Staying there or receiving more output does not acknowledge it. A read action clears the current unread mark; the next completion becomes blue again. Working and blocked states take precedence over read state.
 
+Read history survives ordinary refreshes and temporary `unknown` detection states. Native `idle`/`done` presentation changes without a new lifecycle generation do not create another completion.
+
+Observed working/blocked rounds also survive temporary `unknown` states and become unread when they return to idle. Detection recovery alone does not create another completion.
+
 Read actions are: the toggle shortcut, leaving and returning to the pane, actual terminal scrollback movement, supported content-area wheel input, saving/clearing a note, or renaming the Tab. **Tab renaming acknowledges every Agent in that Tab**, including renames performed by another plugin. Directory, Tab name and Git branch are resolved again on each status refresh; animation ticks only change the lamp.
 
 Notes use the current pane name, Agent summary, or conversation title as their initial value. `Enter` saves, empty input + `Enter` clears, and `Ctrl+C` cancels. A note replaces the native pane name and is limited to 80 Unicode characters. Renaming a pane outside this shortcut refreshes the displayed note on the next focus or Agent event.
@@ -115,6 +119,8 @@ Create `config.json` there; all settings are optional:
 | `wheel_read` | Enables the shared Windows listener for supported hosts. False retains public terminal scrollback detection. |
 
 Changes apply on the monitor's next cycle. If it has exited, run `npm run init`. The native helper runs only while panes are unread; the shared monitor exits when neither unread panes nor animated working lights need it. Colors are static and can be changed in Herdr's sidebar config.
+
+If the native helper exits or verification times out, the monitor retries automatically, with at least five seconds between helper starts.
 
 To change shortcuts, edit the existing `key` entries in the `# herdr-remark begin` / `end` block of Herdr's config; do not append duplicates. Validate with `herdr config check`, then apply with `herdr server reload-config`.
 

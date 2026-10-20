@@ -10,8 +10,8 @@ function clean(text) {
     // generic control-character pass would turn its payload into visible junk.
     .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\|$)/g, "")
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    // Other two-character escapes (ESC ( ) * + # % and single-letter ones).
-    .replace(/\x1b[@-Z\\\[\]_()*+#%\-]?/g, "")
+    // Other ESC sequences include intermediate bytes, e.g. ESC ( B selects ASCII.
+    .replace(/\x1b[ -/]*[0-~]?/g, "")
     .replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim())
     .slice(0, 80).join("");
 }

@@ -12,7 +12,7 @@ beforeEach(() => { wheel.start = () => ({ close() {} }); });
 const { clean, directory } = require("../src/text");
 const herdr = require("../src/herdr");
 const remark = require("../src/remark");
-const { LAMP_SOURCE, READ_SOURCE, DATA_SOURCE } = require("../src/tokens");
+const { LAMP_SOURCE, READ_SOURCE, lampTokens } = require("../src/tokens");
 const net = require("node:net");
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "remark-test-"));
@@ -75,26 +75,27 @@ test("a request without a socket path fails instead of hanging", async () => {
 test("the lamp alternates between one bright and one dim token", () => {
   const agent = { pane_id: "w1:p1", cwd: "C:\\work\\repo", agent: "codex", agent_status: "working" };
   for (const on of [true, false]) {
-    const tokens = blink.lampTokens(agent, on);
+    const tokens = lampTokens(agent, on);
     assert.deepEqual(Object.entries(tokens).filter(([, value]) => value !== null),
-      [[on ? blink.ON : blink.OFF, "● repo"]]);
+      [[on ? "remark_lamp_working" : "remark_lamp_working_blink", "● repo"]]);
   }
 });
 
-test("only one daemon may hold the lock, and a dead owner is taken over", () => {
+test("only one daemon may hold the lock, and a dead owner is taken over", async () => {
   const e = env();
   assert.equal(blink.running(e), false);
-  assert.equal(blink.claim(e), true);
+  assert.equal(await blink.claim(e), true);
   assert.equal(blink.lockOwner(e), process.pid);
   // A second claimant sees the live owner and steps aside.
   const mine = process.pid;
   fs.writeFileSync(blink.lockFile(e), String(mine));
   assert.equal(blink.running(e), true);
-  assert.equal(blink.claim(e), false);
+  assert.equal(await blink.claim(e), false);
   // A lock left behind by a process that no longer exists is reclaimed.
+  blink.release(e);
   fs.writeFileSync(blink.lockFile(e), "999999999");
   assert.equal(blink.running(e), false);
-  assert.equal(blink.claim(e), true);
+  assert.equal(await blink.claim(e), true);
   blink.release(e);
   assert.equal(blink.running(e), false);
 });
@@ -104,7 +105,7 @@ test("release leaves another process's lock alone", () => {
   fs.mkdirSync(path.dirname(blink.lockFile(e)), { recursive: true });
   fs.writeFileSync(blink.lockFile(e), "424242");
   blink.release(e);
-  assert.equal(blink.lockOwner(e), 424242);
+  assert.equal(fs.readFileSync(blink.lockFile(e), "utf8"), "424242");
 });
 
 test("a run blinks only working agents, then clears its twin and exits", async () => {
@@ -177,12 +178,6 @@ test("a socket failure is recorded instead of crashing the daemon", async () => 
   await blink.run(e);
   assert.equal(blink.running(e), false);
   assert.match(fs.readFileSync(path.join(e.HERDR_PLUGIN_STATE_DIR, "blink-error.log"), "utf8"), /server gone/);
-});
-
-test("all lamp writers share a source separate from data and unread actions", () => {
-  assert.equal(blink.SOURCE, LAMP_SOURCE);
-  assert.notEqual(blink.SOURCE, DATA_SOURCE);
-  assert.notEqual(blink.SOURCE, READ_SOURCE);
 });
 
 test("cleanup after a transient failure reads the current status before restoring a lamp", async () => {
@@ -261,7 +256,7 @@ test("a late bright tick cannot overwrite a newer idle refresh", async () => {
     if (listings === 2 && !interleaved) {
       interleaved = true;
       agent.agent_status = "idle";
-      apply(herdr.sequence(), blink.lampTokens(agent));
+      apply(herdr.sequence(), lampTokens(agent));
     }
     apply(params.seq, params.tokens);
     return {};
@@ -380,6 +375,80 @@ test("wheel_read false leaves the public scroll subscription available without a
   assert.equal(subscriptions, 1);
 });
 
+test("a failed wheel helper is restarted with a delay while unread panes remain", async t => {
+  const e = env();
+  settings.load = () => ({ blink: false, blinkIntervalMs: 1, wheelRead: true });
+  let starts = 0, ticks = 0;
+  t.mock.method(Date, "now", () => ticks * 2000);
+  const agent = { pane_id: "p1", agent_status: "idle", tokens: { remark_unread: "1" } };
+  socket.request = async method => {
+    if (method !== "agent.list") return { panes: [] };
+    if (++ticks === 3) assert.equal(starts, 1, "failed helpers must not restart every tick");
+    return { agents: ticks <= 4 ? [agent] : [] };
+  };
+  socket.subscribe = () => ({ ready: Promise.resolve(), closed: false, close() {} });
+  wheel.start = () => {
+    const failed = ++starts === 1;
+    return { get closed() { return failed; }, close() {} };
+  };
+  await blink.run(e);
+  assert.equal(starts, 2);
+});
+
+test("scrolling after an automatic completion but before monitor startup is acknowledged", async () => {
+  const e = env();
+  settings.load = () => ({ blink: false, blinkIntervalMs: 1, wheelRead: false });
+  const initial = { offset_from_bottom: 0, max_offset_from_bottom: 100, viewport_rows: 30 };
+  const { activityTokens } = require("../src/tokens");
+  const agent = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "working",
+    state_change_seq: 1, tokens: {}, scroll: initial };
+  Object.assign(agent.tokens, activityTokens(agent));
+  agent.agent_status = "done";
+  agent.state_change_seq = 2;
+  Object.assign(agent.tokens, activityTokens(agent));
+  let writes = 0, ticks = 0;
+  remark.update = () => {};
+  socket.request = async (method, params) => {
+    if (method === "agent.list") return { agents: ++ticks < 8 ? [structuredClone(agent)] : [] };
+    if (method === "pane.list") return { panes: [{ pane_id: "p1", scroll: { ...initial, offset_from_bottom: 3 } }] };
+    assert.equal(params.source, READ_SOURCE);
+    writes++;
+    agent.tokens.remark_seen = "2";
+    return {};
+  };
+  socket.subscribe = () => ({ ready: Promise.resolve(), closed: false, close() {} });
+  await blink.run(e);
+  assert.equal(writes, 1);
+});
+
+test("a completion baseline published after subscription setup is reconciled", async () => {
+  const e = env();
+  settings.load = () => ({ blink: false, blinkIntervalMs: 1, wheelRead: false });
+  const initial = { offset_from_bottom: 0, max_offset_from_bottom: 100, viewport_rows: 30 };
+  const { activityTokens } = require("../src/tokens");
+  const agent = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "working",
+    state_change_seq: 1, tokens: {}, scroll: initial };
+  Object.assign(agent.tokens, activityTokens(agent));
+  agent.agent_status = "done";
+  agent.state_change_seq = 2;
+  let polls = 0, writes = 0;
+  remark.update = () => {};
+  socket.request = async (method, params) => {
+    if (method === "agent.list") {
+      if (++polls === 2) Object.assign(agent.tokens, activityTokens(agent));
+      return { agents: polls < 8 ? [structuredClone(agent)] : [] };
+    }
+    if (method === "pane.list") return { panes: [{ pane_id: "p1", scroll: { ...initial, offset_from_bottom: 3 } }] };
+    assert.equal(params.source, READ_SOURCE);
+    writes++;
+    agent.tokens.remark_seen = "2";
+    return {};
+  };
+  socket.subscribe = () => ({ ready: Promise.resolve(), closed: false, close() {} });
+  await blink.run(e);
+  assert.equal(writes, 1);
+});
+
 test("a queued acknowledgement cannot clear a newer manual mark in the same round", async () => {
   const watched = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "idle",
     state_change_seq: 1, tokens: { remark_unread: "100" } };
@@ -479,6 +548,62 @@ test("reload releases the existing monitor before starting its replacement", asy
   };
   await blink.run(e);
   assert.equal(starts, 1);
+});
+
+test("work arriving during the final idle poll wakes a replacement after release", async () => {
+  const e = env();
+  settings.load = () => ({ blink: true, blinkIntervalMs: 1 });
+  let polls = 0, restarts = 0;
+  socket.request = async method => {
+    assert.equal(method, "agent.list");
+    if (++polls === 2) {
+      for (let i = 0; i < 5; i++)
+        assert.equal(originals.start(e), false, "the old monitor still owns the lock");
+    }
+    return { agents: [] };
+  };
+  blink.start = actual => {
+    assert.equal(actual, e);
+    assert.equal(blink.running(e), false);
+    restarts++;
+  };
+  await blink.run(e);
+  assert.equal(polls, 2);
+  assert.equal(restarts, 1);
+});
+
+test("a wake immediately before releasing the lock is handed off", async t => {
+  const e = env();
+  settings.load = () => ({ blink: true, blinkIntervalMs: 1 });
+  socket.request = async () => ({ agents: [] });
+  const lock = require("../src/monitor-lock");
+  const release = lock.release;
+  t.mock.method(lock, "release", file => {
+    assert.equal(originals.start(e), false);
+    release(file);
+  });
+  let restarts = 0;
+  blink.start = () => {
+    assert.equal(blink.running(e), false);
+    restarts++;
+  };
+  await blink.run(e);
+  assert.equal(restarts, 1);
+});
+
+test("an idle monitor without a wake request exits without spawning a replacement", async () => {
+  const e = env();
+  settings.load = () => ({ blink: true, blinkIntervalMs: 1 });
+  let polls = 0, restarts = 0;
+  socket.request = async method => {
+    assert.equal(method, "agent.list");
+    polls++;
+    return { agents: [] };
+  };
+  blink.start = () => { restarts++; };
+  await blink.run(e);
+  assert.equal(polls, 2);
+  assert.equal(restarts, 0);
 });
 
 test("scrolling immediately after marking unread is detected during monitor startup", async () => {

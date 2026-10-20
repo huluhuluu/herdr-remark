@@ -3,6 +3,7 @@ const { test, afterEach, after } = require("node:test");
 const assert = require("node:assert/strict");
 const herdr = require("../src/herdr");
 const remark = require("../src/remark");
+const { clean, directory } = require("../src/text");
 const { LAMP_SOURCE, READ_SOURCE } = require("../src/tokens");
 // A fixture that reports a working agent must not spawn a real blink daemon
 // against whatever Herdr server happens to be running on this machine, so the
@@ -135,12 +136,13 @@ test("a failed note rename does not clear unread", () => {
   assert.equal(pane.tokens.remark_unread, "1");
 });
 test("note cleaning and terminal identity remain bounded", () => {
-  assert.equal(remark.clean("  hello\n\x1b[31m世界\x1b[0m  "), "hello 世界");
+  assert.equal(clean("  hello\n\x1b[31m世界\x1b[0m  "), "hello 世界");
   // OSC and non-CSI escapes must not leak their payload as visible text.
-  assert.equal(remark.clean("\x1b]0;window title\x07hello"), "hello");
-  assert.equal(remark.clean("\x1b]0;title\x1b\\hello"), "hello");
-  assert.equal(remark.clean("\x1b(Bascii"), "Bascii");
-  assert.equal(Array.from(remark.clean("😀".repeat(100))).length, 80);
+  assert.equal(clean("\x1b]0;window title\x07hello"), "hello");
+  assert.equal(clean("\x1b]0;title\x1b\\hello"), "hello");
+  assert.equal(clean("\x1b(Bascii"), "ascii");
+  assert.equal(clean("\x1b)0text\x1b(B"), "text");
+  assert.equal(Array.from(clean("😀".repeat(100))).length, 80);
   const { pane, calls } = fixture();
   herdr.paneForTerminal = id => { assert.equal(id, "term"); return pane; };
   remark.update(pane, true);
@@ -439,7 +441,7 @@ test("viewing during work does not acknowledge the completion that follows", () 
 test("directories and note defaults use actual names", () => {
   for (const [cwd, name] of [["C:\\work\\repo\\", "repo"], ["/work/repo/", "repo"],
     ["/", "/"], ["", ""], ["\\\\server\\share\\repo", "repo"]])
-    assert.equal(remark.directory(cwd), name);
+    assert.equal(directory(cwd), name);
   const pane = { label: "Note", tokens: { summary: "Summary" }, terminal_title_stripped: "Title" };
   assert.equal(remark.initialNote(pane), "Note");
   delete pane.label;
@@ -479,19 +481,13 @@ test("a batch resolves each branch from that pane's current directory", () => {
       const pane = args[2] === "w1:p2" ? { ...moved, cwd: "C:\\work\\other" } : stale;
       return { pane };
     }
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] === "--clear-token") delete moved.tokens[args[++i]];
-      if (args[i] === "--clear-token") delete stale.tokens[args[++i]];
-      if (args[i] === "--token") { const [k, ...r] = args[++i].split("="); (args[2] === "w1:p1" ? stale : moved).tokens[k] = r.join("="); }
-    }
+    if (args[1] === "report-metadata") applyMetadata(args, args[2] === "w1:p1" ? stale : moved);
     return {};
   };
   remark.refresh([stale, moved]);
-  // One prefetch for the shared snapshot cwd, plus one re-resolve because the
-  // second pane actually moved.
+  // Each branch comes from that pane's current directory.
   assert.deepEqual(cwds, ["C:\\work\\repo", "C:\\work\\other"]);
   assert.equal(stale.tokens.remark_branch, "main");
-  // The prefetched branch is the wrong one for the moved pane, so it re-resolves.
   assert.equal(moved.tokens.remark_branch, "elsewhere");
 });
 
@@ -499,6 +495,7 @@ test("an exited agent clears its stale lamp, branch and note", () => {
   const { pane, calls } = fixture("working");
   pane.tokens = { remark_lamp_working: "● repo", remark_branch: "main", remark_note: "note", remark_tab: "Build" };
   const bare = { ...pane, agent: undefined, agent_status: "unknown", tokens: pane.tokens };
+  herdr.branch = () => assert.fail("an exited agent must not query Git");
   herdr.cli = args => {
     calls.push(args);
     if (args[0] === "tab") return { tabs: [{ tab_id: "w1:t1", label: "Build" }] };
@@ -512,7 +509,6 @@ test("an exited agent clears its stale lamp, branch and note", () => {
   assert.deepEqual(bare.tokens, {});
   // Exit must not query a tab or Git for a pane it is only clearing.
   assert.equal(calls.some(args => args[0] === "tab"), false);
-  assert.equal(herdr.branch.called, undefined);
 });
 
 test("an exit also drops a stale unread mark so the next agent is not born unread", () => {
@@ -675,4 +671,49 @@ test("viewing one completion does not mark the next completion as read", () => {
   pane.state_change_seq = 12;
   remark.update(pane);
   assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});
+
+test("batch refresh after detection recovery preserves read state in unrelated agents", () => {
+  const { pane } = fixture("done");
+  pane.state_change_seq = 10;
+  remark.update(pane, false);
+  const other = { ...structuredClone(pane), pane_id: "w1:p2", terminal_id: "other-term" };
+  other.tokens = { remark_activity: JSON.stringify([other.terminal_id, "20", "idle", "20"]),
+    remark_seen: "20", remark_lamp_idle: "○ repo" };
+  other.agent_status = "idle";
+  other.state_change_seq = 20;
+  const panes = [pane, other];
+  const cli = herdr.cli;
+  herdr.cli = args => {
+    if (args[0] === "agent") return { agents: structuredClone(panes) };
+    if (args[1] === "get") return { pane: structuredClone(panes.find(item => item.pane_id === args[2])) };
+    if (args[1] === "report-metadata") {
+      applyMetadata(args, panes.find(item => item.pane_id === args[2]));
+      return {};
+    }
+    return cli(args);
+  };
+  pane.agent_status = "unknown";
+  pane.state_change_seq = 11;
+  remark.main("init");
+  // A note/focus action during detection recovery must not erase prior reads.
+  remark.update(pane, false);
+  pane.agent_status = "done";
+  pane.state_change_seq = 12;
+  remark.main("init");
+  remark.main("init");
+  assert.equal(pane.tokens.remark_seen, "10");
+  for (const item of panes) {
+    assert.equal(item.tokens.remark_lamp_idle, "○ repo");
+    assert.equal(item.tokens.remark_lamp_unread, undefined);
+  }
+  for (const [status, seq] of [["working", 13], ["unknown", 14], ["idle", 15]]) {
+    pane.agent_status = status;
+    pane.state_change_seq = seq;
+    remark.main("init");
+  }
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo", "the agent that worked has a new unread completion");
+  assert.equal(other.tokens.remark_lamp_idle, "○ repo");
+  assert.equal(other.tokens.remark_seen, "20");
+  assert.equal(other.tokens.remark_lamp_unread, undefined);
 });

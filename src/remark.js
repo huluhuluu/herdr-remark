@@ -2,9 +2,9 @@
 
 const herdr = require("./herdr");
 const blink = require("./blink");
-const { clean, directory } = require("./text");
+const { clean } = require("./text");
 const { DATA_SOURCE, LAMP_SOURCE, READ_SOURCE, ACTIVITY_SOURCE, DATA_TOKENS, READ_TOKENS,
-  stateOf, lampTokens, readTokens, activityTokens } = require("./tokens");
+  isUnread, lampTokens, readTokens, activityTokens } = require("./tokens");
 
 function initialNote(pane) {
   return clean(pane.label || pane.tokens?.summary || pane.terminal_title_stripped || pane.title || "");
@@ -69,16 +69,14 @@ function update(pane, unread) {
     remark_tab: clean(tab?.label), remark_branch: branch, remark_note: clean(live.label),
   });
   report(live.pane_id, LAMP_SOURCE, seq, lampTokens(live));
-  if (live.agent_status === "working" || live.tokens?.remark_unread || stateOf(live) === "unread") {
-    try { blink.start(process.env, !!live.tokens?.remark_unread || stateOf(live) === "unread"); }
-    catch { /* the next event can start the monitor again */ }
-  }
+  const watchUnread = isUnread(live);
+  if (live.agent_status === "working" || watchUnread) blink.start(process.env, watchUnread);
   return true;
 }
 
 function toggle(pane) {
   pane = readPane(pane.pane_id) || pane;
-  const unread = !(pane.tokens?.remark_unread || stateOf(pane) === "unread");
+  const unread = !isUnread(pane);
   update(pane, unread);
   return unread;
 }
@@ -171,4 +169,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { clean, initialNote, directory, stateOf, update, toggle, saveNote, refresh, main };
+module.exports = { initialNote, update, toggle, saveNote, refresh, main };

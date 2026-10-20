@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.5
+
+- Retain pending work through unknown detection snapshots, without repeating an already acknowledged completion. Cover batch refreshes containing both an active agent and unrelated read agents.
+- Hand off wake requests received during monitor shutdown after releasing ownership. Elect one monitor using unique process registrations, including stale-lock contention and interrupted startup; normal ticks keep the existing socket polling cadence.
+- Preserve completed-round identity and read history across refreshes, native idle/done presentation changes, and temporary unknown detection states. Viewing during work or detection recovery no longer discards earlier read history.
+- Capture automatic-completion scroll baselines in the existing activity record, so scrolling before the monitor subscribes is reconciled. Restart failed native wheel helpers with a five-second minimum between starts.
+- Fix charset escape removal, remove unused exports/aliases and obsolete reap configuration comments, and share the unread predicate across refresh and monitoring.
+
 ## 0.6.4
 
 - Add a Windows WezTerm adapter using the running GUI's read-only CLI, with PID/focus/content checks and bounds derived from actual pane sizes. Account for relative GUI socket discovery in the Windows runtime directory.
