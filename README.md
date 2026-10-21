@@ -17,7 +17,7 @@ Keep track of finished Agent turns, mark them read, and add short notes without 
 
 Remark uses Herdr's pane identity and lifecycle API, with **no Agent-name whitelist**. Codex, Claude Code, DST (reported as `dsh-tui` in the tested environment), and other [Herdr-recognized or self-reporting Agents](https://herdr.dev/docs/agents/) use the same logic. The model/provider behind an Agent does not affect Remark. Herdr must recognize the pane as an Agent and report its state correctly; Remark does not add detection for an otherwise unsupported Agent.
 
-| Host | Status, notes, shortcuts | Terminal scrollback → read | Fullscreen application wheel → read |
+| Host | Status, notes, shortcuts | Herdr pane scrollback → read | Application-owned wheel → read |
 | --- | --- | --- | --- |
 | Windows + Windows Terminal | Yes | Yes | Yes, through a passive native listener |
 | Windows + WezTerm | Yes | Yes | Implemented with read-only CLI matching; manual wheel confirmation pending |
@@ -25,11 +25,15 @@ Remark uses Herdr's pane identity and lifecycle API, with **no Agent-name whitel
 | Windows + other terminals | Yes | Yes | Not implemented |
 | macOS | Yes | Yes | Not implemented |
 | Linux | Yes | Yes | Not implemented |
-| SSH / remote server | Through the target server's API | Yes, when reported by Herdr | Requires the listener and terminal desktop on the same machine |
+| SSH / remote server | Through the target server's API | Both connection paths; see below | No cross-machine native listener forwarding |
 
 Requirements: **Herdr 0.8.2+, Node.js 18+ and Git** available to Herdr's plugin processes. Herdr 0.9.1+ is recommended for native focus-event fixes. `completion_seq`, when supplied by newer Herdr versions, is used without requiring a version-specific adapter.
 
 Windows Terminal scroll-to-read has been confirmed in a live Herdr 0.9.1 session. CI covers Windows, macOS and Linux with Node.js 18/20/22/24; Agent contract tests include Codex, Claude Code, DST/`dsh-tui`, OpenCode, Copilot and arbitrary custom names. These tests verify shared API behavior, **not live installations of every Agent or terminal**. Native macOS/Linux desktop behavior has not been manually verified.
+
+An isolated Ubuntu 22.04 session over SSH, with Herdr 0.9.5 and Node.js 22.22.0, verified installation/check/reinstallation, TUI shortcuts and note editing, working-light animation, completion/read tracking, focus/Tab renames, terminal scrollback acknowledgement and monitor shutdown using a self-reporting test Agent. Scroll input was injected through a terminal PTY; this does not verify physical desktop wheel input or fullscreen-application scrolling.
+
+Two concurrent servers sharing plugin storage also verified independent animation, read marks, monitor reloads and shutdown. The two SSH scrolling paths below were also verified between a Windows client and a Linux server.
 
 ### Terminals and shells
 
@@ -43,6 +47,22 @@ PowerShell, PowerShell 7, CMD and Git Bash use the same implementation when runn
 WezTerm **20240203-110809-5046fc22** was checked with its installed Windows CLI and a temporary GUI: PID, pane text, pixel dimensions, content bounds and rejection of an unfocused window were verified. Automated tests cover split/zoomed panes, Unicode sidebar prefixes, padding, ambiguous content and focus changes. Physical wheel → read in WezTerm and Console Host/OpenConsole still needs manual confirmation. No extra terminal or Agent was installed.
 
 WezTerm's CLI does not expose the placement of padding or the tab bar. Matching uses the content rectangle common to all possible placements inside the client area. Consequently **wheel input near pane edges can remain unread**, especially with large padding or Unicode prefixes. Central content-area scrolling is preferred. Missing CLI capabilities, inaccessible GUI sockets or ambiguous content leave the mark unread; custom overlays are not supported. Another read action remains available. No terminal configuration is changed to work around these limits.
+
+### Scrolling over SSH
+
+Herdr filling a terminal window, or a maximized window, does not mean the application owns scrolling. What matters is whether input changes the Herdr pane's scrollback position.
+
+| Connection | Where Remark runs | Herdr pane scrollback → read |
+| --- | --- | --- |
+| Run `ssh workbox`, then `herdr` on the server | Remote server | Verified |
+| Run `herdr --remote workbox` locally | Remote server; the local client draws the UI | Verified |
+| Select a saved remote machine in Herdr | Selected remote server | Uses the same server scroll API; machine-switching UI not separately tested here |
+
+Both tested paths carried standard terminal wheel input to Herdr, changed the server's scrollback position and acknowledged the unread mark. Tests used PTY input and a self-reporting process, not physical wheel input or every Agent. Install Remark remotely as well; installing it locally does not install it on the server. The local client uses its local sidebar configuration.
+
+`herdr --remote` defaults to local built-in keybindings and does not forward local custom command bindings. To use the Remark shortcuts installed on the server, run `herdr --remote workbox --remote-keybindings server`. Scrollback acknowledgement also works with the default connection options.
+
+An Agent/TUI can request mouse input and scroll its own content without changing Herdr's scrollback position. This boundary was reproduced through both connections: the remote application received the wheel input, while the mark remained unread. Remote plugins cannot invoke the local Windows listener, and native wheel events are not forwarded across machines. Use the unread shortcut or refocus to acknowledge in that case. Shift-wheel handled by the outer terminal, or a terminal that does not forward mouse events, may also leave Herdr unaware of scrolling.
 
 ## Install
 
@@ -68,6 +88,10 @@ sh scripts/install.sh
 Or use `node scripts/install.js` on any supported platform. There is no `npm install` step. Add `--check` to any installer command to validate without linking or replacing the active config.
 
 The installer validates the config, backs it up when changed, links the plugin, and adds sidebar rows and shortcuts. It preserves unrelated settings and stops if unmanaged sidebar/keybinding settings conflict. In that case, merge [config.example.toml](config.example.toml) into the active config, then run `herdr plugin link .` and `npm run init`. Existing `rows_by_agent` layouts may need the same tokens added manually.
+
+If applying the config fails or only partially succeeds, the installer restores the previous file and reloads it. If that reload also fails, the error distinguishes the restored file from unconfirmed running settings and prints a recovery command. Concurrent external edits are preserved.
+
+Multiline shell-command strings are preserved, including text resembling Remark's markers. Shortcut values written as multiline TOML strings require the same manual merge.
 
 **Keep this checkout after installation:** Herdr links to it. The default config is `%APPDATA%\herdr\config.toml` on Windows or `~/.config/herdr/config.toml` on macOS/Linux. `HERDR_CONFIG_PATH` overrides the file; `XDG_CONFIG_HOME` overrides the config base. `HERDR_BIN_PATH` can select a Herdr executable outside `PATH`.
 
@@ -118,7 +142,7 @@ Create `config.json` there; all settings are optional:
 | `blink_interval_ms` | Pulse interval, clamped to 100–60000 ms. Default: 800. |
 | `wheel_read` | Enables the shared Windows listener for supported hosts. False retains public terminal scrollback detection. |
 
-Changes apply on the monitor's next cycle. If it has exited, run `npm run init`. The native helper runs only while panes are unread; the shared monitor exits when neither unread panes nor animated working lights need it. Colors are static and can be changed in Herdr's sidebar config.
+Changes apply on the monitor's next cycle. If it has exited, run `npm run init`. Each Herdr server has its own monitor, scoped automatically by its API socket; plugin settings remain shared. The native helper runs only while panes are unread, and that server's monitor exits when neither unread panes nor animated working lights need it. Colors are static and can be changed in Herdr's sidebar config.
 
 If the native helper exits or verification times out, the monitor retries automatically, with at least five seconds between helper starts.
 
@@ -139,7 +163,7 @@ Initialization waits for Herdr's refresh action and reloads an existing monitor.
 ## Troubleshooting
 
 - **An Agent is missing or has the wrong working/blocked state:** inspect `herdr agent explain <pane_id>` and [Herdr's detection documentation](https://herdr.dev/docs/agents/). Remark only writes its own metadata; it never reports lifecycle state or clears Agent authority.
-- **Fullscreen scrolling stays blue:** check the [host support and verification status](#terminals-and-shells). The listener checks the foreground window, actual focused pane, visible text and content-area coordinates. Locked/background windows, ambiguous matches or insufficient text remain unread. In WezTerm, try the middle of the content area and ensure its adjacent CLI can reach the GUI. Use another read action when matching is unavailable. The listener does not consume/inject mouse input or inspect keystrokes; text is compared in memory through local pipes, never saved or logged.
+- **Application-owned scrolling stays blue:** check the [host support and verification status](#terminals-and-shells). The listener checks the foreground window, actual focused pane, visible text and content-area coordinates. Locked/background windows, ambiguous matches or insufficient text remain unread. In WezTerm, try the middle of the content area and ensure its adjacent CLI can reach the GUI. Use another read action when matching is unavailable. The listener does not consume/inject mouse input or inspect keystrokes; text is compared in memory through local pipes, never saved or logged.
 - **The listener stopped:** run `npm run init`. For input-only diagnostics, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`. This bounded probe changes no read state and does not inspect conversation text.
 - **Refresh failed:** inspect `herdr plugin log list --plugin huluhlu.agent-inform`; verify Node.js/Git/Herdr are available to the existing server's plugin environment. Retry `npm run init` after correcting the cause.
 
@@ -152,5 +176,7 @@ npm test
 ```
 
 The existing Node test runner uses no extra packages or Agent installations. Windows tests exercise the native helper's startup, UTF-8 protocol and EOF cleanup; macOS/Linux tests exercise the POSIX installer with spaces and `CDPATH`. Temporary test files are removed after use. Report problems with the OS, terminal, Herdr/Node/Agent versions and steps to reproduce; redact conversation text and private paths.
+
+Plugin identity and the minimum Herdr version come from `herdr-plugin.toml`; the Node requirement comes from `package.json`. Installer bindings come from `config.example.toml`. Herdr's fixed API text limit is centralized in `src/text.js`, with no additional chunking of oversized records. Monitor paths derive from the supplied state directory and socket identity, without machine, checkout, branch or Agent-name assumptions.
 
 [Changelog](CHANGELOG.md) · [Issues](https://github.com/huluhuluu/herdr-remark/issues) · [MIT License](LICENSE)

@@ -4,12 +4,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { createHash } = require("node:crypto");
 const herdr = require("./herdr");
 const settings = require("./settings");
 const socket = require("./socket");
 const wheel = require("./wheel");
 const monitorLock = require("./monitor-lock");
-const { LAMP_SOURCE, READ_SOURCE, isUnread, lampTokens, readTokens, scrollBaseline } = require("./tokens");
+const { LAMP_SOURCE, READ_SOURCE, isUnread, lampTokens, readTokens, scrollBaseline, sameReadState } = require("./tokens");
 
 // Herdr token styles are static: fg, bold and dim are fixed per token in
 // config.toml, and there is no per-frame event a plugin can hook. A
@@ -20,9 +21,17 @@ const { LAMP_SOURCE, READ_SOURCE, isUnread, lampTokens, readTokens, scrollBaseli
 const IDLE_TICKS_BEFORE_EXIT = 2;
 const WHEEL_RETRY_MS = 5000;
 
-function stateDir(env = process.env) {
+function sharedStateDir(env) {
   return env.HERDR_PLUGIN_STATE_DIR ||
     path.join(os.tmpdir(), "herdr-remark-" + (env.HERDR_PLUGIN_ID || herdr.ID));
+}
+
+function stateDir(env = process.env) {
+  const endpoint = socket.pipePath(env.HERDR_SOCKET_PATH);
+  if (!endpoint) return sharedStateDir(env);
+  // Plugin storage is shared across Herdr sessions; monitor ownership is not.
+  const identity = process.platform === "win32" ? endpoint.toLowerCase() : endpoint;
+  return path.join(sharedStateDir(env), "sessions", createHash("sha256").update(identity).digest("hex"));
 }
 
 function lockFile(env = process.env) {
@@ -51,8 +60,13 @@ function stamp(env, name) {
 }
 
 function requestReload(env = process.env) {
-  if (!env.HERDR_SOCKET_PATH || !env.HERDR_PLUGIN_STATE_DIR || !running(env)) return;
-  fs.writeFileSync(path.join(stateDir(env), "blink.reload"), String(herdr.sequence()));
+  if (!env.HERDR_SOCKET_PATH || !env.HERDR_PLUGIN_STATE_DIR) return;
+  // An older monitor may still own the shared lock after an update. Ask it to
+  // release and restart with its own inherited socket, without stopping Agents.
+  for (const directory of new Set([stateDir(env), sharedStateDir(env)])) {
+    if (monitorLock.owner(path.join(directory, "blink.lock")))
+      fs.writeFileSync(path.join(directory, "blink.reload"), String(herdr.sequence()));
+  }
 }
 
 function scrolled(previous, next) {
@@ -66,11 +80,7 @@ function scrolled(previous, next) {
 
 async function acknowledge(watched, seq, env = process.env) {
   const options = { socketPath: env.HERDR_SOCKET_PATH };
-  const live = (await socket.request("agent.list", {}, options)).agents?.find(agent =>
-    agent.pane_id === watched.pane_id && agent.terminal_id === watched.terminal_id &&
-    agent.state_change_seq === watched.state_change_seq &&
-    agent.completion_seq === watched.completion_seq &&
-    agent.tokens?.remark_unread === watched.tokens?.remark_unread);
+  const live = (await socket.request("agent.list", {}, options)).agents?.find(agent => sameReadState(watched, agent));
   if (!live) return;
   await socket.request("pane.report_metadata", {
     pane_id: live.pane_id, source: READ_SOURCE, seq, tokens: readTokens(live, false),
@@ -135,7 +145,16 @@ async function run(env = process.env) {
       observedWake = stamp(env, "wake");
       const config = settings.load(env);
       const seq = herdr.sequence();
-      const agents = (await socket.request("agent.list", {}, options)).agents || [];
+      let agents;
+      try { agents = (await socket.request("agent.list", {}, options)).agents || []; }
+      catch (error) {
+        record(error, env);
+        // A failed poll need not strand unread panes until the next lifecycle
+        // event. Keep the existing subscription if this server is still alive.
+        await socket.request("ping", {}, options);
+        await sleep(config.blinkIntervalMs);
+        continue;
+      }
       const byId = new Map(agents.map(agent => [agent.pane_id, agent]));
       const working = config.blink ? agents.filter(agent => agent.agent_status === "working") : [];
       on = !on;

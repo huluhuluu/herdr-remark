@@ -1,6 +1,8 @@
 "use strict";
 
 const path = require("node:path");
+// Herdr's pane-name and metadata text limit is part of its public API.
+const MAX_TEXT_LENGTH = 80;
 
 // Terminal output and pane titles routinely carry escape sequences. Strip them
 // before they reach a sidebar token, where they would render as visible junk.
@@ -13,7 +15,7 @@ function clean(text) {
     // Other ESC sequences include intermediate bytes, e.g. ESC ( B selects ASCII.
     .replace(/\x1b[ -/]*[0-~]?/g, "")
     .replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim())
-    .slice(0, 80).join("");
+    .slice(0, MAX_TEXT_LENGTH).join("");
 }
 
 // The directory shown on a sidebar row, derived from a pane's cwd. The parser
@@ -26,4 +28,4 @@ function directory(cwd = "") {
   return clean(parser.basename(cwd) || parser.parse(cwd).root);
 }
 
-module.exports = { clean, directory };
+module.exports = { MAX_TEXT_LENGTH, clean, directory };

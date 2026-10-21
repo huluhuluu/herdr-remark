@@ -3,7 +3,28 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
+const { performance } = require("node:perf_hooks");
 const held = new Map();
+// Windows sharing violations can outlive a synchronous read/rename call.
+// Wait briefly for the other process without dropping its registration.
+const FILE_RETRY_DELAY_MS = 10;
+const FILE_RETRY_TIMEOUT_MS = 1000;
+const retrySignal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+
+function retryFile(operation) {
+  const deadline = performance.now() + FILE_RETRY_TIMEOUT_MS;
+  for (;;) {
+    try { return operation(); }
+    catch (error) {
+      if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code) || performance.now() >= deadline) throw error;
+      Atomics.wait(retrySignal, 0, 0, FILE_RETRY_DELAY_MS);
+    }
+  }
+}
+
+function remove(file) {
+  retryFile(() => fs.rmSync(file, { force: true }));
+}
 
 function alive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -12,7 +33,7 @@ function alive(pid) {
 }
 
 function read(file) {
-  try { return fs.readFileSync(file, "utf8"); }
+  try { return retryFile(() => fs.readFileSync(file, "utf8")); }
   catch (error) { if (error.code === "ENOENT") return ""; throw error; }
 }
 
@@ -27,8 +48,8 @@ function candidates(file) {
     if (!alive(pid)) {
       // Each registration has a unique name; reclaiming it cannot remove a
       // replacement owner's registration, even when several processes race.
-      fs.rmSync(entry, { force: true });
-      fs.rmSync(entry + ".tmp", { force: true });
+      remove(entry);
+      remove(entry + ".tmp");
       return [];
     }
     const ticket = read(entry);
@@ -44,8 +65,8 @@ function owner(file) {
 function publish(file, value, temporary) {
   try {
     fs.writeFileSync(temporary, String(value), { flag: "wx" });
-    fs.renameSync(temporary, file);
-  } finally { fs.rmSync(temporary, { force: true }); }
+    retryFile(() => fs.renameSync(temporary, file));
+  } finally { remove(temporary); }
 }
 
 async function claim(file) {
@@ -76,15 +97,15 @@ async function claim(file) {
       return true;
     }
   } finally {
-    if (!acquired) fs.rmSync(entry, { force: true });
+    if (!acquired) remove(entry);
   }
 }
 
 function release(file) {
   const entry = held.get(file);
   if (!entry) return;
-  if (Number(read(file)) === process.pid) fs.rmSync(file, { force: true });
-  fs.rmSync(entry, { force: true });
+  if (Number(read(file)) === process.pid) remove(file);
+  remove(entry);
   held.delete(file);
 }
 

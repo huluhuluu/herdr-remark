@@ -100,6 +100,30 @@ test("only one daemon may hold the lock, and a dead owner is taken over", async 
   assert.equal(blink.running(e), false);
 });
 
+test("sessions sharing plugin storage elect independent monitors and reload only their own", async () => {
+  const first = env();
+  const second = { ...first, HERDR_SOCKET_PATH: "another-session.sock" };
+  try {
+    assert.equal(await blink.claim(first), true);
+    assert.equal(await blink.claim(second), true);
+    assert.notEqual(blink.lockFile(first), blink.lockFile(second));
+    blink.requestReload(first);
+    assert.ok(fs.existsSync(path.join(blink.stateDir(first), "blink.reload")));
+    assert.equal(fs.existsSync(path.join(blink.stateDir(second), "blink.reload")), false);
+  } finally { blink.release(first); blink.release(second); }
+});
+
+test("reload hands an older shared monitor over to the current session-aware implementation", async () => {
+  const e = env();
+  const monitorLock = require("../src/monitor-lock");
+  const legacy = path.join(e.HERDR_PLUGIN_STATE_DIR, "blink.lock");
+  assert.equal(await monitorLock.claim(legacy), true);
+  try {
+    blink.requestReload(e);
+    assert.ok(fs.readFileSync(path.join(e.HERDR_PLUGIN_STATE_DIR, "blink.reload"), "utf8"));
+  } finally { monitorLock.release(legacy); }
+});
+
 test("release leaves another process's lock alone", () => {
   const e = env();
   fs.mkdirSync(path.dirname(blink.lockFile(e)), { recursive: true });
@@ -148,7 +172,7 @@ test("blinking disabled starts no animation and leaves working lamps alone", asy
     return { agents: [{ pane_id: "p1", agent: "codex", agent_status: "working" }] };
   };
   await blink.run(e);
-  assert.equal(fs.existsSync(path.join(e.HERDR_PLUGIN_STATE_DIR, "blink-error.log")), false);
+  assert.equal(fs.existsSync(path.join(blink.stateDir(e), "blink-error.log")), false);
 });
 
 test("turning blinking off mid-run stops the daemon without a restart", async () => {
@@ -177,7 +201,26 @@ test("a socket failure is recorded instead of crashing the daemon", async () => 
   socket.request = async () => { throw new Error("server gone"); };
   await blink.run(e);
   assert.equal(blink.running(e), false);
-  assert.match(fs.readFileSync(path.join(e.HERDR_PLUGIN_STATE_DIR, "blink-error.log"), "utf8"), /server gone/);
+  assert.match(fs.readFileSync(path.join(blink.stateDir(e), "blink-error.log"), "utf8"), /server gone/);
+});
+
+test("a transient poll failure keeps monitoring when the same server still responds", async () => {
+  const e = env();
+  settings.load = () => ({ blink: true, blinkIntervalMs: 1 });
+  let polls = 0, pings = 0, recoveredPaint = false;
+  socket.request = async (method, params) => {
+    if (method === "ping") { pings++; return {}; }
+    if (method === "agent.list") {
+      if (++polls === 2) throw Error("transient poll failure");
+      return { agents: polls <= 3 ? [{ pane_id: "p1", agent: "custom", agent_status: "working" }] : [] };
+    }
+    if (polls === 3 && (params.tokens.remark_lamp_working || params.tokens.remark_lamp_working_blink)) recoveredPaint = true;
+    return {};
+  };
+  await blink.run(e);
+  assert.equal(pings, 1);
+  assert.equal(recoveredPaint, true);
+  assert.equal(blink.running(e), false);
 });
 
 test("cleanup after a transient failure reads the current status before restoring a lamp", async () => {
@@ -310,7 +353,7 @@ test("scroll-to-read uses the existing monitor even with blinking off and coales
   assert.equal(refreshed, 1);
   assert.equal(closed, 1);
   assert.equal(blink.running(e), false);
-  assert.equal(fs.existsSync(path.join(e.HERDR_PLUGIN_STATE_DIR, "blink-error.log")), false);
+  assert.equal(fs.existsSync(path.join(blink.stateDir(e), "blink-error.log")), false);
 });
 
 test("a delayed scroll event does not acknowledge a newer completion", async () => {
@@ -701,4 +744,23 @@ test("subscription framing accepts fragmented and coalesced events and exposes d
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(events, ["one", "two"]);
   assert.equal(sub.closed, true);
+});
+
+function slowResponse(client, response) {
+  client.write(" ");
+  const stream = setInterval(() => client.write(" "), 10);
+  const finish = setTimeout(() => { clearInterval(stream); client.end(response + "\n"); }, 500);
+  client.on("close", () => { clearInterval(stream); clearTimeout(finish); });
+}
+
+test("socket request timeout bounds the whole response even while bytes keep arriving", { timeout: 2000 }, async t => {
+  const options = await transport(t, client => slowResponse(client, '{"result":{"ok":true}}'));
+  await assert.rejects(socket.request("probe", {}, options), /超时/);
+});
+
+test("subscription startup timeout cannot be postponed by a partial stream", { timeout: 2000 }, async t => {
+  const options = await transport(t, client => slowResponse(client, '{"result":{"type":"subscription_started"}}'));
+  const sub = socket.subscribe([], () => {}, options);
+  t.after(() => sub.close());
+  await assert.rejects(sub.ready, /超时/);
 });

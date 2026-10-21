@@ -24,13 +24,15 @@ function worker(t, file) {
     const lock = require(${JSON.stringify(require.resolve("../src/monitor-lock"))});
     const file = process.argv[1];
     process.on('message', async command => {
-      if (command === 'claim') process.send({claimed: await lock.claim(file)});
-      if (command === 'choose') {
-        fs.mkdirSync(file + '.claims', {recursive: true});
-        fs.writeFileSync(path.join(file + '.claims', process.pid + '-' + randomUUID()), '0', {flag: 'wx'});
-        process.send({choosing: true});
-      }
-      if (command === 'release') { lock.release(file); process.disconnect(); }
+      try {
+        if (command === 'claim') process.send({claimed: await lock.claim(file)});
+        if (command === 'choose') {
+          fs.mkdirSync(file + '.claims', {recursive: true});
+          fs.writeFileSync(path.join(file + '.claims', process.pid + '-' + randomUUID()), '0', {flag: 'wx'});
+          process.send({choosing: true});
+        }
+        if (command === 'release') { lock.release(file); process.disconnect(); }
+      } catch (error) { process.send({error: error.stack}); }
     });
     process.send({ready: true});
   `;
@@ -46,7 +48,9 @@ function worker(t, file) {
 async function send(child, command) {
   const response = once(child, "message");
   child.send(command);
-  return (await response)[0];
+  const value = (await response)[0];
+  if (value.error) throw new Error(value.error);
+  return value;
 }
 
 test("simultaneous stale-lock contenders elect one holder and leave no registrations", { timeout: 20000 }, async t => {
@@ -93,4 +97,30 @@ test("a failed owner publication removes its registration", async t => {
   await assert.rejects(lock.claim(file), { code: "EACCES" });
   assert.equal(fs.existsSync(file), false);
   assert.deepEqual(fs.readdirSync(file + ".claims"), []);
+});
+
+test("Windows sharing violations during ticket reads and publication preserve lock ownership", { skip: process.platform !== "win32" }, async t => {
+  const file = temporaryLock(t);
+  const read = fs.readFileSync;
+  const rename = fs.renameSync;
+  let denied = false;
+  let blocked = false;
+  t.mock.method(fs, "readFileSync", (target, ...args) => {
+    if (!denied && String(target).startsWith(file + ".claims" + path.sep)) {
+      denied = true;
+      throw Object.assign(Error("ticket replacement in progress"), { code: "EPERM" });
+    }
+    return read(target, ...args);
+  });
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (!blocked && to === file) {
+      blocked = true;
+      throw Object.assign(Error("shared file replacement in progress"), { code: "EPERM" });
+    }
+    return rename(from, to);
+  });
+  assert.equal(await lock.claim(file), true);
+  assert.equal(denied, true);
+  assert.equal(blocked, true);
+  assert.equal(lock.owner(file), process.pid);
 });

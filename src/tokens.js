@@ -1,7 +1,7 @@
 "use strict";
 
 const { ID } = require("./herdr");
-const { directory } = require("./text");
+const { clean, directory } = require("./text");
 
 // Each field family has one ordering clock. Animation cannot invalidate data
 // refreshes or user actions, but every lamp writer orders against every other.
@@ -20,11 +20,25 @@ const LAMP_TOKENS = Object.keys(LAMPS).map(key => "remark_lamp_" + key)
 const DATA_TOKENS = ["remark_tab", "remark_branch", "remark_note"];
 const READ_TOKENS = ["remark_unread", "remark_seen", "remark_scroll"];
 
+// Herdr caps each metadata value at 80 characters. Field names in a scroll
+// object exhaust that budget inside the round record; store just the numbers.
+function compactScroll(scroll) {
+  return scroll ? [scroll.offset_from_bottom, scroll.max_offset_from_bottom, scroll.viewport_rows] : null;
+}
+
+function expandScroll(scroll) {
+  return Array.isArray(scroll) ? {
+    offset_from_bottom: scroll[0], max_offset_from_bottom: scroll[1], viewport_rows: scroll[2],
+  } : scroll;
+}
+
 function activity(pane) {
   try {
     // [terminal, state sequence, status, completed round, scroll baseline, pending work]
     const value = JSON.parse(pane.tokens?.remark_activity || "null");
-    return Array.isArray(value) && value[0] === pane.terminal_id ? value : null;
+    if (!Array.isArray(value) || value[0] !== pane.terminal_id) return null;
+    value[4] = expandScroll(value[4]);
+    return value;
   } catch { return null; }
 }
 
@@ -59,8 +73,16 @@ function activityTokens(pane) {
   const pending = ["working", "blocked"].includes(pane.agent_status) ||
     (pane.agent_status === "unknown" && pendingWork(previous));
   const value = JSON.stringify([pane.terminal_id, String(pane.state_change_seq),
-    pane.agent_status, turn, turn ? scroll : null, pending]);
-  return value === pane.tokens?.remark_activity ? null : { remark_activity: value };
+    pane.agent_status, turn, turn ? compactScroll(scroll) : null, pending]);
+  // Even an unchanged record must advance this source's ordering clock so a
+  // delayed report cannot restore an older working state after this refresh.
+  return { remark_activity: value };
+}
+
+function sameReadState(expected, live) {
+  return !!expected && !!live && expected.pane_id === live.pane_id && expected.terminal_id === live.terminal_id &&
+    expected.state_change_seq === live.state_change_seq && expected.completion_seq === live.completion_seq &&
+    expected.tokens?.remark_unread === live.tokens?.remark_unread;
 }
 
 function stateOf(pane) {
@@ -79,7 +101,7 @@ function isUnread(pane) {
 
 function scrollBaseline(pane) {
   if (pane.tokens?.remark_unread) {
-    try { return JSON.parse(pane.tokens.remark_scroll || "null") ?? undefined; }
+    try { return expandScroll(JSON.parse(pane.tokens.remark_scroll || "null")) ?? undefined; }
     catch { return undefined; }
   }
   const previous = activity(pane);
@@ -91,7 +113,7 @@ function lampTokens(pane, on = true) {
   if (!pane.agent) return tokens;
   const state = stateOf(pane);
   const key = state === "working" && !on ? BLINK_TOKEN : "remark_lamp_" + state;
-  tokens[key] = [LAMPS[state], directory(pane.cwd)].filter(Boolean).join(" ");
+  tokens[key] = clean([LAMPS[state], directory(pane.cwd)].filter(Boolean).join(" "));
   return tokens;
 }
 
@@ -100,7 +122,7 @@ function readTokens(pane, unread, seq) {
   return { remark_unread: unread ? String(seq) : null,
     // Keep the mark's scroll position so a scroll during monitor startup is
     // observed too. This small token follows the unread mark's lifecycle.
-    remark_scroll: unread && pane.scroll ? JSON.stringify(pane.scroll) : null,
+    remark_scroll: unread && pane.scroll ? JSON.stringify(compactScroll(pane.scroll)) : null,
     // A view during work or detection recovery has no completion to acknowledge.
     // Keep the earlier read; the next completion still has a different generation.
     remark_seen: unread ? seen : completion(pane) ?? seen };
@@ -108,4 +130,4 @@ function readTokens(pane, unread, seq) {
 
 module.exports = { LAMP_TOKENS, DATA_TOKENS, READ_TOKENS,
   DATA_SOURCE, LAMP_SOURCE, READ_SOURCE, ACTIVITY_SOURCE,
-  completion, activityTokens, stateOf, isUnread, lampTokens, readTokens, scrollBaseline };
+  completion, activityTokens, sameReadState, stateOf, isUnread, lampTokens, readTokens, scrollBaseline };

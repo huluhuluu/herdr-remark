@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Advance the activity ordering clock on unchanged refreshes too. Delayed working records can no longer overwrite a current idle record and invent an unread completion after detection recovery.
+- Reload the restored config after a failed or partial installation reload. If that runtime rollback also fails, distinguish the restored file from settings that may still be active and print the recovery command.
+- Isolate monitor locks, wake requests, reloads and error logs by the actual API socket. Multiple Herdr sessions sharing plugin storage now animate and acknowledge reads independently; initialization also signals older shared monitors to reload.
+- Retry transient Windows file-sharing failures during lock reads, publication and cleanup within a bounded window, preserving registration ordering. Surface worker errors directly in concurrency tests instead of waiting for a reply from an exited worker.
+- Recheck focus, lifecycle generation and manual unread identity before acknowledging a read. Delayed actions cannot acknowledge a newer target snapshot, and toggle output reflects accepted state.
+- Store scroll baselines compactly within the existing activity record, while accepting older object records. Retain Herdr's native metadata limits without additional chunking.
+- Reject invalid UTF-8 configs before linking or writing. Compare original and installed config bytes before replacement or rollback so concurrent edits are preserved.
+- Preserve management-marker text inside multiline TOML shell commands, and decode escaped shortcut values when checking conflicts. Ambiguous multiline shortcut declarations require a manual merge before any file is replaced.
+- Bound complete socket requests and subscription startup even when partial bytes keep arriving. Continue polling after a transient failure while the same server still responds to ping.
+- Read plugin identity and minimum versions from the manifests, detect shortcut conflicts from the actual example bindings, and share Herdr's text limit between metadata and the editor. Bound the complete lamp text as well. Comments mentioning a plugin action no longer cause a false conflict.
+- Verify Linux installation and core interactions in isolated Ubuntu 22.04 / Herdr 0.9.5 sessions over SSH, including TUI shortcuts, popup editing, scroll subscriptions, monitor shutdown and two concurrent servers sharing plugin storage. Document the tested scope in both READMEs.
+- Verify scrollback acknowledgement through both SSH followed by remote Herdr and a local `herdr --remote` client. Document application-owned mouse scrolling separately from Herdr's full-window terminal UI, including the lack of cross-machine native wheel forwarding.
+
 ## 0.6.5
 
 - Retain pending work through unknown detection snapshots, without repeating an already acknowledged completion. Cover batch refreshes containing both an active agent and unrelated read agents.

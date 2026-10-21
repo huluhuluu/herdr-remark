@@ -1,6 +1,7 @@
 "use strict";
 
 const net = require("node:net");
+const DEFAULT_TIMEOUT_MS = 5000;
 
 // Herdr's API socket answers exactly one request per connection and then closes
 // it, so every call dials a fresh connection. That is still roughly twelve times
@@ -15,21 +16,24 @@ function pipePath(socketPath) {
   return socketPath;
 }
 
-function request(method, params, { socketPath = process.env.HERDR_SOCKET_PATH, timeout = 5000 } = {}) {
+function request(method, params, { socketPath = process.env.HERDR_SOCKET_PATH, timeout = DEFAULT_TIMEOUT_MS } = {}) {
   const target = pipePath(socketPath);
   if (!target) return Promise.reject(new Error("HERDR_SOCKET_PATH 未设置。"));
   return new Promise((resolve, reject) => {
     const socket = net.connect(target);
     let buffer = "";
     let settled = false;
+    let timer;
     const finish = (error, value) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       socket.destroy();
       if (error) reject(error); else resolve(value);
     };
     socket.setEncoding("utf8");
-    socket.setTimeout(timeout, () => finish(new Error(`herdr socket 超时：${method}`)));
+    // An idle timeout restarts on each chunk and cannot bound a slow response.
+    if (timeout > 0) timer = setTimeout(() => finish(new Error(`herdr socket 超时：${method}`)), timeout);
     socket.on("error", error => finish(new Error(`herdr socket 失败：${error.message}`)));
     socket.on("end", () => finish(new Error(`herdr socket 响应不完整：${method}`)));
     socket.on("close", () => finish(new Error(`herdr socket 已关闭：${method}`)));
@@ -49,19 +53,20 @@ function request(method, params, { socketPath = process.env.HERDR_SOCKET_PATH, t
 
 // Subscriptions keep their connection open. Herdr fixes the subscription set
 // per connection, so callers reconnect when the set of watched panes changes.
-function subscribe(subscriptions, onEvent, { socketPath = process.env.HERDR_SOCKET_PATH, timeout = 5000 } = {}) {
+function subscribe(subscriptions, onEvent, { socketPath = process.env.HERDR_SOCKET_PATH, timeout = DEFAULT_TIMEOUT_MS } = {}) {
   const target = pipePath(socketPath);
   if (!target) throw new Error("HERDR_SOCKET_PATH 未设置。");
   const socket = net.connect(target);
   let buffer = "";
   let started = false;
   const ready = new Promise((resolve, reject) => {
-    const fail = error => { reject(error); socket.destroy(); };
+    let timer;
+    const fail = error => { clearTimeout(timer); reject(error); socket.destroy(); };
     socket.setEncoding("utf8");
-    socket.setTimeout(timeout, () => fail(new Error("herdr 订阅超时。")));
+    if (timeout > 0) timer = setTimeout(() => fail(new Error("herdr 订阅超时。")), timeout);
     socket.on("error", fail);
     socket.on("end", () => socket.destroy());
-    socket.on("close", () => { if (!started) reject(new Error("herdr 订阅已关闭。")); });
+    socket.on("close", () => { clearTimeout(timer); if (!started) reject(new Error("herdr 订阅已关闭。")); });
     socket.on("connect", () => socket.write(JSON.stringify({ id: "remark", method: "events.subscribe",
       params: { subscriptions } }) + "\n"));
     socket.on("data", chunk => {
@@ -76,7 +81,7 @@ function subscribe(subscriptions, onEvent, { socketPath = process.env.HERDR_SOCK
         if (message.error) { fail(new Error(message.error.message)); return; }
         if (message.result?.type === "subscription_started") {
           started = true;
-          socket.setTimeout(0);
+          clearTimeout(timer);
           resolve();
         } else if (message.event) onEvent(message);
       }

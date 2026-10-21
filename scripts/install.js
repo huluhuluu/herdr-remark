@@ -3,10 +3,48 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { TextDecoder } = require("node:util");
 const { spawnSync } = require("node:child_process");
-const ROOT = path.resolve(__dirname, "..");
+const { ROOT, PLUGIN_ID, MIN_HERDR_VERSION, NODE_REQUIREMENT, versionAtLeast } = require("../src/plugin");
 const BEGIN = "# herdr-remark begin";
 const END = "# herdr-remark end";
+
+// Keep line positions while hiding multiline string bodies. Markers and table
+// names in shell command text are data, not editable TOML structure.
+function codeLines(text) {
+  let multiline;
+  return text.split("\n").map(line => {
+    const inside = !!multiline;
+    if (!inside && /^\s*(?:key|"key"|'key')\s*=\s*(?:"""|''')/.test(line))
+      throw Error("Multiline shortcut strings require a manual config merge.");
+    let quote;
+    for (let i = 0; i < line.length; i++) {
+      const character = line[i];
+      if (multiline) {
+        if (multiline === '"""' && character === "\\") { i++; continue; }
+        if (line.startsWith(multiline, i)) {
+          const endQuote = multiline[0];
+          while (line[i + 1] === endQuote) i++;
+          multiline = undefined;
+        }
+      } else if (quote) {
+        if (quote === '"' && character === "\\") i++;
+        else if (character === quote) quote = undefined;
+      } else if (character === "#") break;
+      else if (line.startsWith('"""', i) || line.startsWith("'''", i)) {
+        multiline = line.slice(i, i + 3);
+        i += 2;
+      } else if (character === '"' || character === "'") quote = character;
+    }
+    return inside || multiline ? "" : line;
+  });
+}
+
+function basicString(value) {
+  const escapes = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", '"': '"', "\\": "\\" };
+  return value.replace(/\\(?:u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|(["\\bfnrt]))/g,
+    (_, short, long, escape) => escape ? escapes[escape] : String.fromCodePoint(parseInt(short || long, 16)));
+}
 
 function configPath(env = process.env, platform = process.platform) {
   const base = env.XDG_CONFIG_HOME || (platform === "win32"
@@ -20,15 +58,21 @@ function mergeConfig(current, example) {
   const eol = current.includes("\r\n") ? "\r\n" : "\n";
   const text = current.replace(/\r\n/g, "\n");
   const lines = text.split("\n");
-  const starts = lines.flatMap((line, i) => line.trim() === BEGIN ? [i] : []);
-  const ends = lines.flatMap((line, i) => line.trim() === END ? [i] : []);
+  const visible = codeLines(text);
+  const starts = visible.flatMap((line, i) => line.trim() === BEGIN ? [i] : []);
+  const ends = visible.flatMap((line, i) => line.trim() === END ? [i] : []);
   if (starts.length > 1 || ends.length !== starts.length || ends[0] < starts[0])
     throw Error("Invalid Remark config markers; fix the begin/end block before installing.");
   const outside = starts.length ? [...lines.slice(0, starts[0]), ...lines.slice(ends[0] + 1)].join("\n") : text;
+  const unmanaged = codeLines(outside).join("\n");
+  const strings = (content, key) => [...content.matchAll(/^\s*(?:([a-zA-Z_]+)|"([^"]+)"|'([^']+)')\s*=\s*(?:"((?:[^"\\\r\n]|\\.)*)"|'([^'\r\n]*)')/gm)]
+    .filter(match => (match[1] || (match[2] && basicString(match[2])) || match[3]) === key)
+    .map(match => match[5] ?? basicString(match[4]));
+  const keys = new Set(strings(codeLines(example).join("\n"), "key").map(key => key.trim().toLowerCase()));
   // Reject conflicting unmanaged settings instead of parsing/reformatting user TOML.
-  if (/^\s*\[\s*ui\s*\.\s*sidebar\s*\.\s*agents(?:\s*\]|\s*\.)/m.test(outside) ||
-      /^\s*key\s*=\s*["']prefix\+(?:shift\+)?u["']/im.test(outside) ||
-      outside.includes("huluhlu.agent-inform.")) {
+  if (/^\s*\[\s*ui\s*\.\s*sidebar\s*\.\s*agents(?:\s*\]|\s*\.)/m.test(unmanaged) ||
+      strings(unmanaged, "key").some(key => keys.has(key.trim().toLowerCase())) ||
+      strings(unmanaged, "command").some(command => command.startsWith(PLUGIN_ID + "."))) {
     throw Error("Existing sidebar or Remark keybindings found outside the managed block. Merge config.example.toml manually; no settings were changed.");
   }
   const block = [BEGIN, example.replace(/\r\n/g, "\n").trim(), END].join("\n");
@@ -48,14 +92,17 @@ function run(bin, args, env = {}) {
 }
 
 function install({ target = configPath(), check = false, execute = run, bin = process.env.HERDR_BIN_PATH || "herdr" } = {}) {
-  if (Number(process.versions.node.split(".")[0]) < 18) throw Error("Node.js 18+ is required.");
+  if (!versionAtLeast(process.versions.node, NODE_REQUIREMENT)) throw Error(`Node.js ${NODE_REQUIREMENT} is required.`);
   execute("git", ["--version"]);
-  const version = execute(bin, ["--version"]).match(/(\d+)\.(\d+)\.(\d+)/);
-  if (!version || (Number(version[1]) === 0 && (Number(version[2]) < 8 ||
-      (Number(version[2]) === 8 && Number(version[3]) < 2)))) throw Error("Herdr 0.8.2+ is required.");
+  if (!versionAtLeast(execute(bin, ["--version"]), MIN_HERDR_VERSION))
+    throw Error(`Herdr ${MIN_HERDR_VERSION}+ is required.`);
   target = fs.existsSync(target) ? fs.realpathSync(target) : path.resolve(target);
   const original = fs.existsSync(target) ? fs.readFileSync(target) : null;
-  const merged = mergeConfig(original?.toString("utf8") || "", fs.readFileSync(path.join(ROOT, "config.example.toml"), "utf8"));
+  let current = "";
+  try {
+    if (original) current = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(original);
+  } catch { throw Error("Config must be UTF-8 TOML."); }
+  const merged = mergeConfig(current, fs.readFileSync(path.join(ROOT, "config.example.toml"), "utf8"));
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const staged = `${target}.remark-check-${process.pid}.toml`;
   let backup;
@@ -66,7 +113,8 @@ function install({ target = configPath(), check = false, execute = run, bin = pr
     if (check) return { target, checked: true };
     // Linking needs a running Herdr session. Failure here leaves the config intact.
     execute(bin, ["plugin", "link", ROOT]);
-    if ((fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null) !== (original?.toString("utf8") ?? null))
+    const latest = fs.existsSync(target) ? fs.readFileSync(target) : null;
+    if (original ? !latest?.equals(original) : latest !== null)
       throw Error("Config changed during installation; rerun the installer.");
     const changed = merged !== original?.toString("utf8");
     if (changed) {
@@ -76,16 +124,24 @@ function install({ target = configPath(), check = false, execute = run, bin = pr
       }
       fs.renameSync(staged, target);
     }
-    try {
+    const reload = () => {
       const response = JSON.parse(execute(bin, ["server", "reload-config"]));
       if (response.result?.status !== "applied")
         throw Error(`Config reload: ${JSON.stringify(response)}`);
-    } catch (error) {
+    };
+    try { reload(); }
+    catch (error) {
       if (changed) {
-        if (!fs.existsSync(target) || fs.readFileSync(target, "utf8") !== merged)
+        if (!fs.existsSync(target) || !fs.readFileSync(target).equals(Buffer.from(merged, "utf8")))
           throw Error(`Reload failed and config changed externally; left it untouched. Backup: ${backup || "none (new config)"}. ${error.message}`);
         if (original) fs.writeFileSync(target, original);
         else fs.unlinkSync(target);
+        // A partial response or interrupted reply may have applied settings.
+        // Restore the running server too, without replacing external edits.
+        try { reload(); }
+        catch (rollback) {
+          throw Error(`Reload failed; previous config restored on disk, but runtime reload failed (${rollback.message}). The plugin remains linked. Rerun: ${bin} server reload-config. ${error.message}`);
+        }
       }
       throw Error(`Reload failed; previous config restored. The plugin remains linked. ${error.message}`);
     }

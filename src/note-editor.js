@@ -2,10 +2,11 @@
 
 const readline = require("node:readline");
 const { saveNote } = require("./remark");
+const { MAX_TEXT_LENGTH } = require("./text");
 
 async function edit() {
   if (!process.env.REMARK_TERMINAL) throw new Error("请通过备注快捷键打开编辑器。");
-  process.stdout.write("\x1b[2J\x1b[H备注（80 字以内）\r\nEnter 保存 · 空行清除 · Ctrl-C 取消\r\n\r\n");
+  process.stdout.write(`\x1b[2J\x1b[H备注（${MAX_TEXT_LENGTH} 字以内）\r\nEnter 保存 · 空行清除 · Ctrl-C 取消\r\n\r\n`);
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
   const answer = await new Promise(resolve => {
     rl.on("SIGINT", () => { resolve(null); rl.close(); });

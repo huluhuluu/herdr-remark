@@ -6,6 +6,7 @@ const readline = require("node:readline");
 const socket = require("./socket");
 const herdr = require("./herdr");
 const wezterm = require("./wezterm");
+const { sameReadState } = require("./tokens");
 
 // Whole visible lines let UI Automation locate the pane without guessing the
 // sidebar width, font metrics, Unicode cell widths, or the caller's HERDR_PANE_ID.
@@ -24,10 +25,7 @@ async function target(event, watched, verify, options) {
   const snapshot = (await socket.request("session.snapshot", {}, options)).snapshot;
   const agent = snapshot?.agents?.find(item => item.pane_id === snapshot.focused_pane_id);
   const previous = watched.get(agent?.pane_id);
-  if (!previous || previous.terminal_id !== agent.terminal_id ||
-      previous.state_change_seq !== agent.state_change_seq ||
-      previous.completion_seq !== agent.completion_seq ||
-      previous.tokens?.remark_unread !== agent.tokens?.remark_unread) return;
+  if (!sameReadState(previous, agent)) return;
   const layout = snapshot.layouts?.find(item => item.tab_id === snapshot.focused_tab_id);
   const rect = layout?.panes?.find(item => item.pane_id === agent.pane_id)?.rect;
   if (!rect?.width || !rect.height) return;

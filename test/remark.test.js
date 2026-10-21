@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const herdr = require("../src/herdr");
 const remark = require("../src/remark");
 const { clean, directory } = require("../src/text");
-const { LAMP_SOURCE, READ_SOURCE } = require("../src/tokens");
+const { LAMP_SOURCE, READ_SOURCE, ACTIVITY_SOURCE } = require("../src/tokens");
 // A fixture that reports a working agent must not spawn a real blink daemon
 // against whatever Herdr server happens to be running on this machine, so the
 // suite runs as though the plugin had no socket.
@@ -90,6 +90,38 @@ test("native completion is acknowledged without changing state labels", () => {
   remark.update(pane);
   assert.deepEqual(pane.tokens, tokens);
 });
+test("an unchanged activity refresh rejects delayed working records before detection recovery", () => {
+  const { pane } = fixture("working");
+  pane.state_change_seq = 2;
+  const cli = herdr.cli;
+  let delayed;
+  herdr.cli = args => {
+    if (!delayed && args[1] === "report-metadata" && args[args.indexOf("--source") + 1] === ACTIVITY_SOURCE) {
+      delayed = args;
+      return {};
+    }
+    return cli(args);
+  };
+  remark.update(pane);
+  // An earlier-started refresh can read the newer idle state and publish it
+  // before the delayed working report, using its older ordering clock.
+  pane.agent_status = "idle";
+  pane.state_change_seq = 3;
+  pane.tokens.remark_seen = "3";
+  cli(["pane", "report-metadata", pane.pane_id, "--source", ACTIVITY_SOURCE, "--seq", "0",
+    "--token", "remark_activity=" + JSON.stringify([pane.terminal_id, "3", "idle", "3", null, false])]);
+  remark.update(pane);
+  cli(delayed);
+  for (const [status, seq] of [["unknown", 4], ["idle", 5]]) {
+    pane.agent_status = status;
+    pane.state_change_seq = seq;
+    remark.update(pane);
+  }
+  assert.equal(pane.tokens.remark_seen, "3");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  assert.equal(pane.tokens.remark_lamp_unread, undefined);
+});
+
 test("layout metadata is compact and omits an absent branch", () => {
   const { pane } = fixture(); herdr.branch = () => ""; remark.update(pane, false);
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo"); assert.equal(pane.tokens.remark_branch, undefined); assert.equal(pane.tokens.remark_note, undefined);
@@ -323,6 +355,39 @@ test("a late focus hook for a pane that is no longer focused only refreshes meta
   process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { pane_id: pane.pane_id } });
   remark.main("event");
   assert.equal(pane.tokens.remark_unread, mark);
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});
+
+test("focus lost during a hook cannot acknowledge a newer manual unread mark", () => {
+  const { pane } = fixture();
+  remark.update(pane, true);
+  const cli = herdr.cli;
+  let changed = false;
+  herdr.cli = args => {
+    const result = cli(args);
+    if (args[0] === "agent" && !changed) {
+      changed = true;
+      pane.focused = false;
+      pane.tokens.remark_unread = "new-manual-mark";
+    }
+    return result;
+  };
+  process.env.HERDR_PLUGIN_EVENT = "pane.focused";
+  process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { pane_id: pane.pane_id } });
+  remark.main("event");
+  assert.equal(pane.tokens.remark_unread, "new-manual-mark");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});
+
+test("a delayed read action cannot acknowledge a completion newer than its target snapshot", () => {
+  const { pane } = fixture("idle");
+  Object.assign(pane, { state_change_seq: 10, completion_seq: 9 });
+  remark.update(pane);
+  const target = structuredClone(pane);
+  pane.state_change_seq = 12;
+  pane.completion_seq = 11;
+  remark.update(target, false);
+  assert.notEqual(pane.tokens.remark_seen, "11");
   assert.equal(pane.tokens.remark_lamp_unread, "● repo");
 });
 
@@ -591,9 +656,8 @@ test("toggle renders the accepted unread state after acknowledging completion", 
   pane.state_change_seq = 1;
   assert.equal(remark.toggle(pane), false);
   assert.ok(calls.every(args => args[1] !== "focus"));
-  // Read the action target and then the accepted state after writing the flag.
-  assert.equal(calls.filter(args => args[1] === "get").length, 3);
   assert.equal(pane.agent_status, "done");
+  assert.equal(pane.tokens.remark_seen, "1");
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
 });
 

@@ -1,10 +1,10 @@
 "use strict";
 
-const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { ROOT, PLUGIN_ID } = require("./plugin");
 
 // Keep the installed id so existing keybindings and linked installs still work.
-const ID = process.env.HERDR_PLUGIN_ID || "huluhlu.agent-inform";
+const ID = process.env.HERDR_PLUGIN_ID || PLUGIN_ID;
 
 // CLI and socket writers stamp the same clock before reading their snapshots.
 const sequence = () => Number(process.hrtime.bigint());
@@ -62,7 +62,7 @@ function branch(cwd) {
 }
 
 function openEditor(pane, initial) {
-  let root = path.resolve(__dirname, "..");
+  let root = ROOT;
   if (root.startsWith("\\\\?\\UNC\\")) root = "\\\\" + root.slice(8);
   else if (root.startsWith("\\\\?\\")) root = root.slice(4);
   return cli([

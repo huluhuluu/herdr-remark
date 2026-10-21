@@ -54,6 +54,38 @@ test("unmanaged layouts, bindings and malformed markers are rejected", () => {
   ]) assert.throws(() => mergeConfig(text, example));
 });
 
+test("shortcut conflicts follow the example instead of a fixed key whitelist", () => {
+  const custom = example.replace('key = "prefix+u"', 'key = "ctrl+r"');
+  assert.throws(() => mergeConfig('[[keys.command]]\nkey = "ctrl+r"\ncommand = "custom"\n', custom), /keybindings/);
+  assert.doesNotThrow(() => mergeConfig('# Previously used huluhlu.agent-inform.note\n', custom));
+});
+
+test("markers and settings inside multiline shell commands are preserved as string content", () => {
+  for (const quote of ["'''", '\"\"\"']) {
+    const current = `[[keys.command]]
+key = "prefix+h"
+type = "shell"
+command = ${quote}
+# herdr-remark begin
+[ui.sidebar.agents]
+key = "prefix+u"
+# herdr-remark end
+${quote}
+`;
+    const merged = mergeConfig(current, example);
+    assert.ok(merged.startsWith(current));
+    assert.ok(merged.endsWith("# herdr-remark end\n"));
+    assert.equal(mergeConfig(merged, example), merged);
+  }
+});
+
+test("escaped TOML shortcut strings are checked by their actual value", () => {
+  assert.throws(() => mergeConfig(String.raw`[[keys.command]]
+key = "prefix\u002bu"
+command = "custom"
+`, example), /keybindings/);
+});
+
 function fixture(t, fail = "") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remark-installer-test-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -97,6 +129,18 @@ test("check validates without linking or changing the user's config", t => {
   assert.equal(f.calls.some(c => c.startsWith("plugin link")), false);
 });
 
+test("invalid UTF-8 config is rejected without modifying or linking it", t => {
+  for (const check of [true, false]) {
+    const f = fixture(t);
+    const original = Buffer.concat([Buffer.from("# existing note: "), Buffer.from([0xff]), Buffer.from("\n")]);
+    fs.writeFileSync(f.target, original);
+    assert.throws(() => install({ ...f, check }), /UTF-8/);
+    assert.deepEqual(fs.readFileSync(f.target), original);
+    assert.deepEqual(fs.readdirSync(f.dir), ["config.toml"]);
+    assert.equal(f.calls.some(c => c.startsWith("plugin link")), false);
+  }
+});
+
 test("install backs up once and repeated install does not duplicate settings", t => {
   const f = fixture(t);
   const result = install(f);
@@ -138,6 +182,18 @@ test("concurrent config changes are preserved instead of overwritten", t => {
   assert.equal(fs.readFileSync(f.target, "utf8"), external);
 });
 
+test("concurrent config edits are compared as bytes, including invalid replacement sequences", t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.target, "# existing note: \ufffd\n");
+  const external = Buffer.concat([Buffer.from("# existing note: "), Buffer.from([0xff]), Buffer.from("\n")]);
+  const execute = (bin, args, env) => {
+    if (args[0] === "plugin") fs.writeFileSync(f.target, external);
+    return f.execute(bin, args, env);
+  };
+  assert.throws(() => install({ ...f, execute }), /changed during installation/);
+  assert.deepEqual(fs.readFileSync(f.target), external);
+});
+
 test("failed reload does not roll back edits made after installation", t => {
   const f = fixture(t);
   const external = f.original + '\n[theme]\nname = "nord"\n';
@@ -152,6 +208,24 @@ test("failed reload does not roll back edits made after installation", t => {
   assert.equal(fs.readFileSync(f.target, "utf8"), external);
 });
 
+test("reload rollback also compares bytes before overwriting concurrent edits", t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.target, "# original replacement character: \ufffd\n");
+  let external;
+  const execute = (bin, args, env) => {
+    if (args.join(" ") === "server reload-config") {
+      const installed = fs.readFileSync(f.target);
+      const offset = installed.indexOf(Buffer.from("\ufffd"));
+      external = Buffer.concat([installed.subarray(0, offset), Buffer.from([0xff]), installed.subarray(offset + Buffer.byteLength("\ufffd"))]);
+      fs.writeFileSync(f.target, external);
+      throw Error("reload interrupted");
+    }
+    return f.execute(bin, args, env);
+  };
+  assert.throws(() => install({ ...f, execute }), /left it untouched/);
+  assert.deepEqual(fs.readFileSync(f.target), external);
+});
+
 test("reload failure in a successful CLI response is not reported as installed", t => {
   for (const status of ["failed", "partial"]) {
     const f = fixture(t);
@@ -162,6 +236,30 @@ test("reload failure in a successful CLI response is not reported as installed",
     assert.equal(fs.readFileSync(f.target, "utf8"), f.original);
     assert.equal(f.calls.some(c => c.endsWith("remark.js reload")), false);
   }
+});
+
+test("a partial reload restores the previous running config as well as its file", t => {
+  const f = fixture(t);
+  let running = f.original;
+  let reloads = 0;
+  const execute = (bin, args, env) => {
+    if (args.join(" ") === "server reload-config") {
+      running = fs.readFileSync(f.target, "utf8");
+      return JSON.stringify({ result: { status: ++reloads === 1 ? "partial" : "applied" } });
+    }
+    return f.execute(bin, args, env);
+  };
+  assert.throws(() => install({ ...f, execute }), /previous config restored/);
+  assert.equal(fs.readFileSync(f.target, "utf8"), f.original);
+  assert.equal(running, f.original);
+  assert.equal(reloads, 2);
+});
+
+test("a failed rollback reload distinguishes restored files from running settings", t => {
+  const f = fixture(t, "server reload-config");
+  assert.throws(() => install(f), /restored on disk.*runtime reload failed/);
+  assert.equal(fs.readFileSync(f.target, "utf8"), f.original);
+  assert.equal(f.calls.filter(command => command === "server reload-config").length, 2);
 });
 
 test("a failed init warns without discarding a successful install", t => {

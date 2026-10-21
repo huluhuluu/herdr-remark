@@ -121,3 +121,45 @@ test("completion scroll baseline is captured once and belongs to its round", () 
   pane.tokens.remark_scroll = "broken";
   assert.equal(scrollBaseline(pane), undefined);
 });
+
+test("completion tracking survives Herdr's 80-character metadata limit", () => {
+  const scroll = { offset_from_bottom: 0, max_offset_from_bottom: 12000, viewport_rows: 40 };
+  const pane = { terminal_id: "term_65e52f6cd53851", tokens: {}, scroll };
+  const report = (status, seq) => {
+    observe(pane, status, seq);
+    for (const key of Object.keys(pane.tokens)) {
+      assert.ok(Array.from(pane.tokens[key]).length <= 80, key + " exceeds Herdr's token limit");
+      pane.tokens[key] = Array.from(pane.tokens[key]).slice(0, 80).join("");
+    }
+  };
+  report("working", 100);
+  report("idle", 101);
+  assert.equal(completion(pane), "101");
+  assert.equal(stateOf(pane), "unread");
+  assert.deepEqual(scrollBaseline(pane), scroll);
+  report("idle", 101);
+  assert.equal(stateOf(pane), "unread");
+});
+
+test("manual unread scroll positions fit the token limit and old object records still load", () => {
+  const scroll = { offset_from_bottom: 123456789, max_offset_from_bottom: 987654321, viewport_rows: 100 };
+  const pane = { terminal_id: "term", tokens: {}, scroll };
+  Object.assign(pane.tokens, readTokens(pane, true, 123));
+  assert.ok(pane.tokens.remark_scroll.length <= 80);
+  assert.deepEqual(scrollBaseline(pane), scroll);
+  pane.tokens.remark_scroll = JSON.stringify(scroll);
+  assert.deepEqual(scrollBaseline(pane), scroll);
+  pane.tokens = { remark_activity: JSON.stringify(["term", "1", "idle", "1", scroll, false]) };
+  pane.agent_status = "idle";
+  pane.state_change_seq = 1;
+  assert.deepEqual(scrollBaseline(pane), scroll);
+});
+
+test("lamp text includes its glyph within the API limit for long Unicode directories", () => {
+  const { lampTokens } = require("../src/tokens");
+  const pane = { agent: "custom", agent_status: "working", cwd: "/tmp/" + "😀".repeat(100) };
+  for (const value of Object.values(lampTokens(pane)).filter(Boolean)) {
+    assert.ok(Array.from(value).length <= 80);
+    assert.ok(value.startsWith("● "));
+  }
+});

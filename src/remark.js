@@ -4,7 +4,7 @@ const herdr = require("./herdr");
 const blink = require("./blink");
 const { clean } = require("./text");
 const { DATA_SOURCE, LAMP_SOURCE, READ_SOURCE, ACTIVITY_SOURCE, DATA_TOKENS, READ_TOKENS,
-  isUnread, lampTokens, readTokens, activityTokens } = require("./tokens");
+  isUnread, lampTokens, readTokens, activityTokens, sameReadState } = require("./tokens");
 
 function initialNote(pane) {
   return clean(pane.label || pane.tokens?.summary || pane.terminal_title_stripped || pane.title || "");
@@ -38,22 +38,31 @@ function report(id, source, seq, tokens) {
 
 // Resolve the current pane, Git branch and Tab label on every refresh. Events
 // and earlier batch snapshots identify the target, not its display values.
-function update(pane, unread) {
+function update(pane, unread, { acknowledgeFocus = false } = {}) {
   let seq = herdr.sequence();
+  let expected = pane.state_change_seq !== undefined || pane.completion_seq !== undefined ? structuredClone(pane) : null;
   let live = readPane(pane.pane_id);
   if (!live) return false;
   if (pane.terminal_id && pane.terminal_id !== live.terminal_id) return false;
+  expected ||= structuredClone(live);
   const activity = live.agent && activityTokens(live);
   if (activity) {
     report(live.pane_id, ACTIVITY_SOURCE, seq, activity);
     live.tokens = { ...live.tokens, ...activity };
   }
-  if (live.agent && unread !== undefined) {
-    report(live.pane_id, READ_SOURCE, seq, readTokens(live, unread, seq));
-    // Render the accepted state, even if this action lost to a newer action.
-    seq = herdr.sequence();
+  if (live.agent && (unread !== undefined || acknowledgeFocus)) {
     live = readPane(pane.pane_id);
     if (!live) return false;
+    if (expected.terminal_id && expected.terminal_id !== live.terminal_id) return false;
+    const desired = acknowledgeFocus ? (live.focused ? false : undefined) : unread;
+    // A delayed gesture belongs to the round and manual mark it observed.
+    if (live.agent && desired !== undefined && (desired || sameReadState(expected, live))) {
+      report(live.pane_id, READ_SOURCE, seq, readTokens(live, desired, seq));
+      // Render the accepted state, even if this action lost to a newer action.
+      seq = herdr.sequence();
+      live = readPane(pane.pane_id);
+      if (!live) return false;
+    }
   }
   if (!live.agent) {
     report(live.pane_id, READ_SOURCE, seq, Object.fromEntries(READ_TOKENS.map(key => [key, null])));
@@ -78,7 +87,7 @@ function toggle(pane) {
   pane = readPane(pane.pane_id) || pane;
   const unread = !isUnread(pane);
   update(pane, unread);
-  return unread;
+  return isUnread(readPane(pane.pane_id) || pane);
 }
 
 function saveNote(terminalId, note) {
@@ -133,12 +142,7 @@ function event() {
   }
   const id = data.pane_id || data.pane?.pane_id;
   if (id) {
-    let unread;
-    if (name === "pane.focused") {
-      const pane = readPane(id);
-      if (pane?.focused) unread = false;
-    }
-    update({ pane_id: id }, unread);
+    update({ pane_id: id }, undefined, { acknowledgeFocus: name === "pane.focused" });
   }
 }
 
