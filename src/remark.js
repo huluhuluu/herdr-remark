@@ -4,7 +4,7 @@ const herdr = require("./herdr");
 const blink = require("./blink");
 const { clean } = require("./text");
 const { DATA_SOURCE, LAMP_SOURCE, READ_SOURCE, ACTIVITY_SOURCE, DATA_TOKENS, READ_TOKENS,
-  isUnread, lampTokens, readTokens, activityTokens, sameReadState } = require("./tokens");
+  isUnread, lampTokens, readTokens, activity, pendingWork, activityTokens, sameReadState } = require("./tokens");
 
 function initialNote(pane) {
   return clean(pane.label || pane.tokens?.summary || pane.terminal_title_stripped || pane.title || "");
@@ -45,19 +45,27 @@ function update(pane, unread, { acknowledgeFocus = false } = {}) {
   if (!live) return false;
   if (pane.terminal_id && pane.terminal_id !== live.terminal_id) return false;
   expected ||= structuredClone(live);
-  const activity = live.agent && activityTokens(live);
-  if (activity) {
-    report(live.pane_id, ACTIVITY_SOURCE, seq, activity);
-    live.tokens = { ...live.tokens, ...activity };
+  const previous = activity(live);
+  const resetRead = !previous && !!live.tokens?.remark_activity;
+  // The first settled snapshot is a baseline, not a newly completed turn.
+  // Unknown detection may precede it; observed work must still complete unread.
+  const initial = !previous || (previous[2] === "unknown" && previous[3] == null && !pendingWork(previous));
+  const record = live.agent && activityTokens(live);
+  const baseline = !!record && (resetRead || (initial && !live.tokens?.remark_unread &&
+    ["idle", "done"].includes(live.agent_status)));
+  if (record) {
+    report(live.pane_id, ACTIVITY_SOURCE, seq, record);
+    live.tokens = { ...live.tokens, ...record };
   }
-  if (live.agent && (unread !== undefined || acknowledgeFocus)) {
+  if (live.agent && (unread !== undefined || acknowledgeFocus || baseline)) {
     live = readPane(pane.pane_id);
     if (!live) return false;
     if (expected.terminal_id && expected.terminal_id !== live.terminal_id) return false;
-    const desired = acknowledgeFocus ? (live.focused ? false : undefined) : unread;
+    const desired = acknowledgeFocus ? (live.focused ? false : undefined) : unread ?? (baseline ? false : undefined);
     // A delayed gesture belongs to the round and manual mark it observed.
     if (live.agent && desired !== undefined && (desired || sameReadState(expected, live))) {
-      report(live.pane_id, READ_SOURCE, seq, readTokens(live, desired, seq));
+      const target = resetRead ? { ...live, tokens: { ...live.tokens, remark_seen: null } } : live;
+      report(live.pane_id, READ_SOURCE, seq, readTokens(target, desired, seq));
       // Render the accepted state, even if this action lost to a newer action.
       seq = herdr.sequence();
       live = readPane(pane.pane_id);
@@ -91,7 +99,10 @@ function toggle(pane) {
 }
 
 function saveNote(terminalId, note) {
-  const pane = herdr.paneForTerminal(terminalId);
+  const target = herdr.paneForTerminal(terminalId);
+  // Keep the round observed before the rename; saving can race a completion.
+  const pane = readPane(target.pane_id);
+  if (!pane?.agent || pane.terminal_id !== terminalId) throw new Error("目标 Agent 已关闭，未保存备注。");
   const value = clean(note);
   // Herdr trims names; a leading space keeps a literal '--clear' from being an option.
   herdr.cli(["pane", "rename", pane.pane_id, value ? " " + value : "--clear"]);

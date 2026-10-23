@@ -112,7 +112,9 @@ Focus the target Agent. The default `prefix` is `Ctrl+B`: press and release it, 
 | Unread completion or manual mark | Blue `●` |
 | Unknown | Gray `·` |
 
-Every observed completed turn starts **blue**, including in the current Tab. Staying there or receiving more output does not acknowledge it. A read action clears the current unread mark; the next completion becomes blue again. Working and blocked states take precedence over read state.
+An Agent's first idle/completed snapshot establishes a **read** baseline, including a restored session's historical completion. Replacing a terminal clears its former occupant's read/unread marks. Reloading Remark preserves existing unread completions and explicit manual marks.
+
+Subsequent completed turns start **blue**, including in the current Tab. Work observed before the first idle snapshot also completes unread. Staying there or receiving more output does not acknowledge it. A read action clears the current unread mark; the next completion becomes blue again. Working and blocked states take precedence over read state.
 
 Read history survives ordinary refreshes and temporary `unknown` detection states. Native `idle`/`done` presentation changes without a new lifecycle generation do not create another completion.
 
@@ -120,7 +122,7 @@ Observed working/blocked rounds also survive temporary `unknown` states and beco
 
 Read actions are: the toggle shortcut, leaving and returning to the pane, actual terminal scrollback movement, supported content-area wheel input, saving/clearing a note, or renaming the Tab. **Tab renaming acknowledges every Agent in that Tab**, including renames performed by another plugin. Directory, Tab name and Git branch are resolved again on each status refresh; animation ticks only change the lamp.
 
-Notes use the current pane name, Agent summary, or conversation title as their initial value. `Enter` saves, empty input + `Enter` clears, and `Ctrl+C` cancels. A note replaces the native pane name and is limited to 80 Unicode characters. Renaming a pane outside this shortcut refreshes the displayed note on the next focus or Agent event.
+Notes use the current pane name, Agent summary, or conversation title as their initial value. `Enter` saves, empty input + `Enter` clears, and `Ctrl+C` cancels. A note replaces the native pane name and is limited to 80 Unicode characters. Saving acknowledges the round observed before the rename; a completion or manual mark arriving during the save stays unread. If the Agent has exited, saving stops without renaming its Shell. Renaming a pane outside this shortcut refreshes the displayed note on the next focus or Agent event.
 
 ## Settings
 

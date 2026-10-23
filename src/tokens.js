@@ -130,4 +130,4 @@ function readTokens(pane, unread, seq) {
 
 module.exports = { LAMP_TOKENS, DATA_TOKENS, READ_TOKENS,
   DATA_SOURCE, LAMP_SOURCE, READ_SOURCE, ACTIVITY_SOURCE,
-  completion, activityTokens, sameReadState, stateOf, isUnread, lampTokens, readTokens, scrollBaseline };
+  activity, pendingWork, completion, activityTokens, sameReadState, stateOf, isUnread, lampTokens, readTokens, scrollBaseline };

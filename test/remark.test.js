@@ -443,6 +443,7 @@ test("active-tab idle completions turn blue for each observed round on older Her
 
 test("native completion_seq is independent of native seen state and state_change_seq", () => {
   const { pane, calls } = fixture("idle");
+  pane.tokens.remark_activity = JSON.stringify([pane.terminal_id, "39", "working", null, null, true]);
   pane.state_change_seq = 50;
   pane.completion_seq = 40;
   remark.update(pane);
@@ -462,6 +463,7 @@ test("native completion tracking, notes and manual unread use no Agent name whit
   for (const name of ["codex", "dsh-tui", "dst", "claude", "opencode", "copilot", "custom-agent"]) {
     const { pane, calls } = fixture("idle");
     Object.assign(pane, { agent: name, state_change_seq: 10, completion_seq: 9 });
+      pane.tokens.remark_activity = JSON.stringify([pane.terminal_id, "8", "working", null, null, true]);
     remark.update(pane);
     assert.equal(pane.tokens.remark_lamp_unread, "● repo", name);
     herdr.paneForTerminal = () => pane;
@@ -780,4 +782,132 @@ test("batch refresh after detection recovery preserves read state in unrelated a
   assert.equal(other.tokens.remark_lamp_idle, "○ repo");
   assert.equal(other.tokens.remark_seen, "20");
   assert.equal(other.tokens.remark_lamp_unread, undefined);
+});
+
+test("first idle or done snapshot establishes a read baseline, including restored completions", () => {
+  for (const status of ["idle", "done"]) {
+    for (const native of [true, false]) {
+      const { pane } = fixture(status);
+      pane.state_change_seq = 10;
+      if (native) pane.completion_seq = 9;
+      remark.update(pane);
+      assert.equal(pane.tokens.remark_lamp_unread, undefined, `${status}, native=${native}`);
+      assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+      remark.main("init");
+      assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+      pane.agent_status = "working";
+      pane.state_change_seq = 11;
+      remark.update(pane);
+      pane.agent_status = "idle";
+      pane.state_change_seq = 12;
+      if (native) pane.completion_seq = 12;
+      remark.update(pane);
+      assert.equal(pane.tokens.remark_lamp_unread, "● repo", "a subsequent round must still be unread");
+      remark.main("init");
+      assert.equal(pane.tokens.remark_lamp_unread, "● repo", "reloading must retain existing unread");
+    }
+  }
+});
+
+test("an initial unknown snapshot does not turn a recovered historical completion unread", () => {
+  const { pane } = fixture("unknown");
+  pane.state_change_seq = 10;
+  remark.update(pane);
+  pane.agent_status = "idle";
+  pane.state_change_seq = 11;
+  pane.completion_seq = 9;
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  assert.equal(pane.tokens.remark_lamp_unread, undefined);
+});
+
+test("a replacement terminal clears the former occupant's manual unread and read generations", () => {
+  const { pane } = fixture("done");
+  Object.assign(pane, { terminal_id: "replacement", state_change_seq: 10, completion_seq: 9 });
+  pane.tokens = { remark_activity: JSON.stringify(["old-terminal", "8", "done", "8", null, false]),
+    remark_unread: "old-mark", remark_seen: "8", remark_scroll: "[0,100,30]" };
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_unread, undefined);
+  assert.equal(pane.tokens.remark_scroll, undefined);
+  assert.equal(pane.tokens.remark_seen, "9");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+});
+
+test("first observation preserves an explicit manual unread mark", () => {
+  const { pane } = fixture("idle");
+  Object.assign(pane, { state_change_seq: 10, completion_seq: 9 });
+  pane.tokens.remark_unread = "manual";
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_unread, "manual");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});
+
+test("initial baseline cannot acknowledge a completion arriving after its snapshot", () => {
+  const { pane } = fixture("idle");
+  Object.assign(pane, { state_change_seq: 10, completion_seq: 9 });
+  const cli = herdr.cli;
+  herdr.cli = args => {
+    const result = cli(args);
+    if (args[1] === "report-metadata" && args.includes(ACTIVITY_SOURCE)) {
+      pane.state_change_seq = 12;
+      pane.completion_seq = 11;
+    }
+    return result;
+  };
+  remark.update(pane);
+  assert.notEqual(pane.tokens.remark_seen, "11");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});
+
+test("initial baseline cannot clear a manual unread mark arriving during initialization", () => {
+  const { pane } = fixture("idle");
+  Object.assign(pane, { state_change_seq: 10, completion_seq: 9 });
+  const cli = herdr.cli;
+  herdr.cli = args => {
+    const result = cli(args);
+    if (args[1] === "report-metadata" && args.includes(ACTIVITY_SOURCE)) pane.tokens.remark_unread = "new-mark";
+    return result;
+  };
+  remark.update(pane);
+  assert.equal(pane.tokens.remark_unread, "new-mark");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});
+
+test("work observed during initial detection recovery still finishes unread", () => {
+  const { pane } = fixture("unknown");
+  for (const [status, seq] of [["unknown", 1], ["blocked", 2], ["unknown", 3], ["idle", 4]]) {
+    pane.agent_status = status;
+    pane.state_change_seq = seq;
+    if (status === "idle") pane.completion_seq = 4;
+    remark.update(pane);
+  }
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});
+
+test("a note save acknowledges its observed round, not a completion arriving during rename", () => {
+  const { pane } = fixture("done");
+  Object.assign(pane, { state_change_seq: 10, completion_seq: 9 });
+  pane.tokens.remark_activity = JSON.stringify([pane.terminal_id, "10", "done", "9", null, false]);
+  herdr.paneForTerminal = () => ({ pane_id: pane.pane_id, terminal_id: pane.terminal_id });
+  const cli = herdr.cli;
+  herdr.cli = args => {
+    const result = cli(args);
+    if (args[1] === "rename") {
+      pane.state_change_seq = 12;
+      pane.completion_seq = 11;
+    }
+    return result;
+  };
+  remark.saveNote(pane.terminal_id, "reviewed previous round");
+  assert.equal(pane.tokens.remark_note, "reviewed previous round");
+  assert.notEqual(pane.tokens.remark_seen, "11");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});
+
+test("saving an old editor after its agent exited does not rename the shell", () => {
+  const { pane, calls } = fixture();
+  herdr.paneForTerminal = () => pane;
+  delete pane.agent;
+  assert.throws(() => remark.saveNote(pane.terminal_id, "old note"), /已关闭/);
+  assert.equal(calls.some(args => args[1] === "rename"), false);
 });

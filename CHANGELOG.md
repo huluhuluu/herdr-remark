@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Establish a read baseline for the first idle/completed Agent snapshot, including historical completions restored on startup and initial unknown detection recovery. Clear inherited read/unread marks when the terminal changes; preserve existing unread rounds on plugin reload and protect concurrent completions/manual marks during initialization.
+- Capture the read generation before saving a note, so a completion arriving during the rename stays unread. Refuse to save an old editor's note after its Agent has exited.
 - Advance the activity ordering clock on unchanged refreshes too. Delayed working records can no longer overwrite a current idle record and invent an unread completion after detection recovery.
 - Reload the restored config after a failed or partial installation reload. If that runtime rollback also fails, distinguish the restored file from settings that may still be active and print the recovery command.
 - Isolate monitor locks, wake requests, reloads and error logs by the actual API socket. Multiple Herdr sessions sharing plugin storage now animate and acknowledge reads independently; initialization also signals older shared monitors to reload.
