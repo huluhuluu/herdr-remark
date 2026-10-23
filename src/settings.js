@@ -19,7 +19,8 @@ function load(env = process.env) {
   let raw = {};
   const file = filePath(env);
   if (file) {
-    try { raw = JSON.parse(fs.readFileSync(file, "utf8")); } catch { raw = {}; }
+    // Windows PowerShell's UTF-8 writer includes a BOM by default.
+    try { raw = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "")); } catch { raw = {}; }
   }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) raw = {};
   const asked = Number(raw.blink_interval_ms);

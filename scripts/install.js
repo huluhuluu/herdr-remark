@@ -107,8 +107,12 @@ function install({ target = configPath(), check = false, execute = run, bin = pr
   const staged = `${target}.remark-check-${process.pid}.toml`;
   let backup;
   let warning;
-  fs.writeFileSync(staged, merged, { flag: "wx", mode: original ? fs.statSync(target).mode & 0o777 : 0o600 });
+  const mode = original ? fs.statSync(target).mode & 0o777 : 0o600;
+  fs.writeFileSync(staged, merged, { flag: "wx", mode });
   try {
+    // Creation applies umask; an atomic replacement must retain the existing
+    // config's permissions rather than silently narrowing them.
+    if (process.platform !== "win32") fs.chmodSync(staged, mode);
     execute(bin, ["config", "check"], { HERDR_CONFIG_PATH: staged });
     if (check) return { target, checked: true };
     // Linking needs a running Herdr session. Failure here leaves the config intact.

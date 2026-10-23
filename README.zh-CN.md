@@ -87,7 +87,7 @@ sh scripts/install.sh
 
 各平台也可直接执行 `node scripts/install.js`。无需 `npm install`。在任一安装命令后加 `--check`，只校验、不链接插件，也不替换当前配置。
 
-安装器校验配置，在有变化时备份，链接插件并添加侧栏与快捷键。无关配置会保留；遇到管理区块外已有的侧栏／快捷键冲突时停止。此时手工合并 [config.example.toml](config.example.toml)，再执行 `herdr plugin link .` 和 `npm run init`。已有 `rows_by_agent` 专用布局可能也需要手工加入相同 token。
+安装器校验配置，在有变化时备份，链接插件并添加侧栏与快捷键。无关配置和已有 POSIX 文件权限会保留；遇到管理区块外已有的侧栏／快捷键冲突时停止。此时手工合并 [config.example.toml](config.example.toml)，再执行 `herdr plugin link .` 和 `npm run init`。已有 `rows_by_agent` 专用布局可能也需要手工加入相同 token。
 
 应用配置失败或仅部分成功时，安装器恢复原配置文件并重新加载；若服务器仍无法重载，会明确说明文件已恢复、运行中的设置尚未确认，并给出恢复命令。检测到外部并发修改时会保留该修改。
 
@@ -146,7 +146,7 @@ Tab 改名包含其他插件触发的自动改名。每次状态刷新重新核�
 herdr plugin config-dir huluhlu.agent-inform
 ```
 
-在该目录创建 `config.json`，所有配置均可选：
+在该目录创建 UTF-8 编码的 `config.json`（支持带 BOM 的文件），所有配置均可选：
 
 ```json
 { "blink": true, "blink_interval_ms": 800, "wheel_read": true }

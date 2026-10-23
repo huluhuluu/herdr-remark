@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep first-read initialization retryable when its metadata write fails, and establish the same baseline when an initial focus event arrives after focus has moved elsewhere. Publish that activity with its original ordering clock so it cannot replace newer work.
+- Preserve POSIX config permissions during installer replacement even under a restrictive umask.
+- Accept UTF-8 BOM plugin settings, including files written by Windows PowerShell, instead of silently reverting to defaults.
 - Establish a read baseline for the first idle/completed Agent snapshot, including historical completions restored on startup and initial unknown detection recovery. Clear inherited read/unread marks when the terminal changes; preserve existing unread rounds on plugin reload and protect concurrent completions/manual marks during initialization.
 - Capture the read generation before saving a note, so a completion arriving during the rename stays unread. Refuse to save an old editor's note after its Agent has exited.
 - Advance the activity ordering clock on unchanged refreshes too. Delayed working records can no longer overwrite a current idle record and invent an unread completion after detection recovery.

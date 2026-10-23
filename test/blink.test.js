@@ -53,6 +53,12 @@ test("blink defaults to on at 800ms and survives a broken config file", () => {
   assert.deepEqual(settings.load(e), { blink: false, blinkIntervalMs: 250, wheelRead: true });
 });
 
+test("UTF-8 BOM settings written by Windows PowerShell retain the configured options", () => {
+  const e = env();
+  fs.writeFileSync(settings.filePath(e), '\ufeff{"blink":false,"blink_interval_ms":400,"wheel_read":false}');
+  assert.deepEqual(settings.load(e), { blink: false, blinkIntervalMs: 400, wheelRead: false });
+});
+
 test("an out-of-range interval is clamped rather than accepted", () => {
   const e = env();
   for (const [asked, expected] of [[1, settings.MIN_INTERVAL_MS], [999999, settings.MAX_INTERVAL_MS],

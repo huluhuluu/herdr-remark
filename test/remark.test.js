@@ -911,3 +911,61 @@ test("saving an old editor after its agent exited does not rename the shell", ()
   assert.throws(() => remark.saveNote(pane.terminal_id, "old note"), /已关闭/);
   assert.equal(calls.some(args => args[1] === "rename"), false);
 });
+
+test("a failed initial read write remains retryable instead of finalizing an unread baseline", () => {
+  for (const recovering of [false, true]) {
+    const { pane } = fixture("idle");
+    Object.assign(pane, { state_change_seq: 10, completion_seq: 9 });
+    if (recovering) pane.tokens.remark_activity = JSON.stringify([pane.terminal_id, "8", "unknown", null, null, false]);
+    const cli = herdr.cli;
+    herdr.cli = args => {
+      if (args[1] === "report-metadata" && args.includes(READ_SOURCE)) throw Error("read write interrupted");
+      return cli(args);
+    };
+    assert.throws(() => remark.update(pane), /read write interrupted/);
+    herdr.cli = cli;
+    remark.update(pane);
+    assert.equal(pane.tokens.remark_seen, "9");
+    assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+    assert.equal(pane.tokens.remark_lamp_unread, undefined);
+  }
+});
+
+test("a late focus event still establishes a new pane's initial read baseline", () => {
+  const { pane } = fixture("idle");
+  Object.assign(pane, { state_change_seq: 10, completion_seq: 9, focused: false });
+  process.env.HERDR_PLUGIN_EVENT = "pane.focused";
+  process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { pane_id: pane.pane_id } });
+  remark.main("event");
+  assert.equal(pane.tokens.remark_seen, "9");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  pane.state_change_seq = 12;
+  pane.completion_seq = 11;
+  remark.main("event");
+  assert.equal(pane.tokens.remark_seen, "9", "lost focus must not acknowledge a subsequent completion");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});
+
+test("delayed baseline publication cannot replace a newer working activity record", () => {
+  const { pane } = fixture("done");
+  pane.state_change_seq = 1;
+  const cli = herdr.cli;
+  let interleaved = false;
+  herdr.cli = args => {
+    if (!interleaved && args[1] === "report-metadata" && args.includes(ACTIVITY_SOURCE)) {
+      interleaved = true;
+      pane.agent_status = "working";
+      pane.state_change_seq = 2;
+      remark.update(pane);
+    }
+    return cli(args);
+  };
+  remark.update(pane);
+  for (const [status, seq] of [["unknown", 3], ["idle", 4]]) {
+    pane.agent_status = status;
+    pane.state_change_seq = seq;
+    remark.update(pane);
+  }
+  assert.equal(pane.tokens.remark_seen, "1");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+});

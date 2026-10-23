@@ -87,7 +87,7 @@ sh scripts/install.sh
 
 Or use `node scripts/install.js` on any supported platform. There is no `npm install` step. Add `--check` to any installer command to validate without linking or replacing the active config.
 
-The installer validates the config, backs it up when changed, links the plugin, and adds sidebar rows and shortcuts. It preserves unrelated settings and stops if unmanaged sidebar/keybinding settings conflict. In that case, merge [config.example.toml](config.example.toml) into the active config, then run `herdr plugin link .` and `npm run init`. Existing `rows_by_agent` layouts may need the same tokens added manually.
+The installer validates the config, backs it up when changed, links the plugin, and adds sidebar rows and shortcuts. It preserves unrelated settings and existing POSIX file permissions, and stops if unmanaged sidebar/keybinding settings conflict. In that case, merge [config.example.toml](config.example.toml) into the active config, then run `herdr plugin link .` and `npm run init`. Existing `rows_by_agent` layouts may need the same tokens added manually.
 
 If applying the config fails or only partially succeeds, the installer restores the previous file and reloads it. If that reload also fails, the error distinguishes the restored file from unconfirmed running settings and prints a recovery command. Concurrent external edits are preserved.
 
@@ -132,7 +132,7 @@ Find the plugin config directory:
 herdr plugin config-dir huluhlu.agent-inform
 ```
 
-Create `config.json` there; all settings are optional:
+Create a UTF-8 `config.json` there (a BOM is accepted); all settings are optional:
 
 ```json
 { "blink": true, "blink_interval_ms": 800, "wheel_read": true }

@@ -40,6 +40,7 @@ function report(id, source, seq, tokens) {
 // and earlier batch snapshots identify the target, not its display values.
 function update(pane, unread, { acknowledgeFocus = false } = {}) {
   let seq = herdr.sequence();
+  const activitySeq = seq;
   let expected = pane.state_change_seq !== undefined || pane.completion_seq !== undefined ? structuredClone(pane) : null;
   let live = readPane(pane.pane_id);
   if (!live) return false;
@@ -53,7 +54,7 @@ function update(pane, unread, { acknowledgeFocus = false } = {}) {
   const record = live.agent && activityTokens(live);
   const baseline = !!record && (resetRead || (initial && !live.tokens?.remark_unread &&
     ["idle", "done"].includes(live.agent_status)));
-  if (record) {
+  if (record && !baseline) {
     report(live.pane_id, ACTIVITY_SOURCE, seq, record);
     live.tokens = { ...live.tokens, ...record };
   }
@@ -61,16 +62,27 @@ function update(pane, unread, { acknowledgeFocus = false } = {}) {
     live = readPane(pane.pane_id);
     if (!live) return false;
     if (expected.terminal_id && expected.terminal_id !== live.terminal_id) return false;
-    const desired = acknowledgeFocus ? (live.focused ? false : undefined) : unread ?? (baseline ? false : undefined);
+    const desired = acknowledgeFocus && live.focused ? false : unread ?? (baseline ? false : undefined);
     // A delayed gesture belongs to the round and manual mark it observed.
     if (live.agent && desired !== undefined && (desired || sameReadState(expected, live))) {
       const target = resetRead ? { ...live, tokens: { ...live.tokens, remark_seen: null } } : live;
       report(live.pane_id, READ_SOURCE, seq, readTokens(target, desired, seq));
       // Render the accepted state, even if this action lost to a newer action.
       seq = herdr.sequence();
-      live = readPane(pane.pane_id);
-      if (!live) return false;
+      if (!baseline) {
+        live = readPane(pane.pane_id);
+        if (!live) return false;
+      }
     }
+  }
+  if (baseline) {
+    // Finalize initialization only after its read write succeeds. A failed
+    // write leaves the first snapshot retryable. Retain the original activity
+    // clock so this delayed publication cannot replace a newer hook's record.
+    const established = live.agent && activityTokens(live);
+    if (established) report(live.pane_id, ACTIVITY_SOURCE, activitySeq, established);
+    live = readPane(pane.pane_id);
+    if (!live) return false;
   }
   if (!live.agent) {
     report(live.pane_id, READ_SOURCE, seq, Object.fromEntries(READ_TOKENS.map(key => [key, null])));

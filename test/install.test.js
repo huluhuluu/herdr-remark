@@ -151,6 +151,17 @@ test("install backs up once and repeated install does not duplicate settings", t
   assert.ok(f.calls.includes("server reload-config"));
 });
 
+test("POSIX install preserves config permissions despite a restrictive umask", { skip: process.platform === "win32" }, t => {
+  const f = fixture(t);
+  fs.chmodSync(f.target, 0o640);
+  const previous = process.umask(0o077);
+  try {
+    const result = install(f);
+    assert.equal(fs.statSync(f.target).mode & 0o777, 0o640);
+    assert.equal(fs.statSync(result.backup).mode & 0o777, 0o640);
+  } finally { process.umask(previous); }
+});
+
 test("validation/link failures leave config intact; reload failure restores it", t => {
   for (const step of ["config check", "plugin link", "server reload-config"]) {
     const f = fixture(t, step);
