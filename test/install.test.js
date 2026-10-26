@@ -96,7 +96,7 @@ function fixture(t, fail = "") {
   const execute = (bin, args, env) => {
     const command = args.join(" ");
     calls.push(command);
-    if (args[0] === "--version") return bin.includes("git") ? "git version 2.45" : "herdr 0.8.2-custom.1";
+    if (args[0] === "--version") return bin.includes("git") ? "git version 2.45" : "herdr 0.9.5-custom.1";
     if (command === "config check") assert.ok(fs.readFileSync(env.HERDR_CONFIG_PATH, "utf8").includes("remark_lamp_unread"));
     if (command.startsWith(fail) && fail) throw Error("simulated failure");
     if (command === "server reload-config") return JSON.stringify({ result: { status: "applied", diagnostics: [] } });
@@ -119,6 +119,15 @@ test("the installer uses HERDR_BIN_PATH when herdr is not on PATH", t => {
     if (previous === undefined) delete process.env.HERDR_BIN_PATH;
     else process.env.HERDR_BIN_PATH = previous;
   }
+});
+
+test("installation requires the native completion contract from Herdr 0.9.5", t => {
+  const f = fixture(t);
+  const execute = (bin, args, env) => args[0] === "--version" && !bin.includes("git")
+    ? "herdr 0.9.4" : f.execute(bin, args, env);
+  assert.throws(() => install({ ...f, execute }), /Herdr 0\.9\.5\+ is required/);
+  assert.equal(fs.readFileSync(f.target, "utf8"), f.original);
+  assert.equal(f.calls.some(command => command.startsWith("plugin link")), false);
 });
 
 test("check validates without linking or changing the user's config", t => {

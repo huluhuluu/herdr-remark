@@ -454,6 +454,7 @@ test("scrolling after an automatic completion but before monitor startup is ackn
   Object.assign(agent.tokens, activityTokens(agent));
   agent.agent_status = "done";
   agent.state_change_seq = 2;
+  agent.completion_seq = 2;
   Object.assign(agent.tokens, activityTokens(agent));
   let writes = 0, ticks = 0;
   remark.update = () => {};
@@ -480,6 +481,7 @@ test("a completion baseline published after subscription setup is reconciled", a
   Object.assign(agent.tokens, activityTokens(agent));
   agent.agent_status = "done";
   agent.state_change_seq = 2;
+  agent.completion_seq = 2;
   let polls = 0, writes = 0;
   remark.update = () => {};
   socket.request = async (method, params) => {
@@ -529,6 +531,7 @@ test("the first scroll after a state transition uses a fresh generation", async 
   socket.subscribe = (_, onEvent) => ({ closed: false, close() {}, ready: Promise.resolve().then(() => {
     agent.agent_status = "done";
     agent.state_change_seq = 2;
+    agent.completion_seq = 2;
     onEvent({ event: "pane.scroll_changed", data: { pane_id: "p1", scroll: { ...scroll, offset_from_bottom: 3 } } });
   }) });
   await blink.run(e);
@@ -558,7 +561,7 @@ test("a completion after the scroll snapshot is not acknowledged by that scroll"
   settings.load = () => ({ blink: false, blinkIntervalMs: 1 });
   const e = env();
   const agent = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "done",
-    state_change_seq: 1, tokens: {} };
+    state_change_seq: 1, completion_seq: 1, tokens: {} };
   const scroll = { offset_from_bottom: 0, max_offset_from_bottom: 100, viewport_rows: 30 };
   let lists = 0, reads = 0;
   socket.request = async method => {
@@ -680,7 +683,7 @@ test("scrolling while the subscription is being established is not lost", async 
   settings.load = () => ({ blink: false, blinkIntervalMs: 1 });
   const e = env();
   const agent = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "done",
-    state_change_seq: 1, tokens: {} };
+    state_change_seq: 1, completion_seq: 1, tokens: {} };
   let offset = 0, lists = 0, reads = 0;
   remark.update = () => {};
   socket.request = async (method, params) => {
@@ -769,4 +772,52 @@ test("subscription startup timeout cannot be postponed by a partial stream", { t
   const sub = socket.subscribe([], () => {}, options);
   t.after(() => sub.close());
   await assert.rejects(sub.ready, /超时/);
+});
+
+test("the monitor reconciles a native /new identity without a lifecycle event", { timeout: 5000 }, async () => {
+  const { sessionKey } = require("../src/tokens");
+  const e = env();
+  settings.load = () => ({ blink: false, blinkIntervalMs: 1, wheelRead: false });
+  const agent = { pane_id: "p1", terminal_id: "term", agent: "custom", agent_status: "idle", state_change_seq: 1,
+    agent_session: { agent: "custom", kind: "id", value: "new" }, tokens: {
+      remark_unread: "old", remark_session: sessionKey({ agent_session: { agent: "custom", kind: "id", value: "old" } }),
+    } };
+  let refreshed = 0;
+  remark.update = pane => {
+    assert.equal(pane.pane_id, agent.pane_id);
+    refreshed++;
+    agent.tokens = { remark_session: sessionKey(agent) };
+  };
+  socket.request = async method => {
+    assert.equal(method, "agent.list");
+    return { agents: [structuredClone(agent)] };
+  };
+  await blink.run(e);
+  assert.equal(refreshed, 1);
+  assert.equal(blink.running(e), false);
+});
+
+test("a scroll captured in the old session cannot read a newly reported session", { timeout: 5000 }, async () => {
+  const { sessionKey } = require("../src/tokens");
+  const e = env();
+  settings.load = () => ({ blink: false, blinkIntervalMs: 1, wheelRead: false });
+  const agent = { pane_id: "p1", terminal_id: "term", agent: "custom", agent_status: "idle", state_change_seq: 1,
+    agent_session: { agent: "custom", kind: "id", value: "old" }, tokens: { remark_unread: "old" } };
+  agent.tokens.remark_session = sessionKey(agent);
+  const scroll = { offset_from_bottom: 0, max_offset_from_bottom: 100, viewport_rows: 30 };
+  let refreshed = 0, reads = 0;
+  socket.request = async method => {
+    if (method === "agent.list") return { agents: [structuredClone(agent)] };
+    if (method === "pane.list") return { panes: [{ pane_id: "p1", scroll }] };
+    reads++;
+    return {};
+  };
+  socket.subscribe = (_, onEvent) => ({ ready: Promise.resolve().then(() => {
+    agent.agent_session.value = "new";
+    onEvent({ event: "pane.scroll_changed", data: { pane_id: "p1", scroll: { ...scroll, offset_from_bottom: 3 } } });
+  }), closed: false, close() {} });
+  remark.update = () => { refreshed++; agent.tokens = { remark_session: sessionKey(agent) }; };
+  await blink.run(e);
+  assert.equal(reads, 0);
+  assert.equal(refreshed, 1);
 });

@@ -10,7 +10,8 @@ const settings = require("./settings");
 const socket = require("./socket");
 const wheel = require("./wheel");
 const monitorLock = require("./monitor-lock");
-const { LAMP_SOURCE, READ_SOURCE, isUnread, lampTokens, readTokens, scrollBaseline, sameReadState } = require("./tokens");
+const { LAMP_SOURCE, READ_SOURCE, isUnread, lampTokens, readTokens, scrollBaseline,
+  sameReadState, sessionKey, sessionChanged } = require("./tokens");
 
 // Herdr token styles are static: fg, bold and dim are fixed per token in
 // config.toml, and there is no per-frame event a plugin can hook. A
@@ -122,7 +123,8 @@ async function run(env = process.env) {
     // Capture at scroll receipt, before waiting behind other panes. The poll's
     // generation may already be stale; acknowledge still validates this snapshot.
     const snapshot = fresh ? socket.request("agent.list", {}, options).then(result =>
-      result.agents?.find(item => item.pane_id === agent.pane_id && item.terminal_id === agent.terminal_id))
+      result.agents?.find(item => item.pane_id === agent.pane_id && item.terminal_id === agent.terminal_id &&
+        sessionKey(item) === sessionKey(agent)))
       : Promise.resolve(agent);
     // Attach rejection handling immediately, even while another read is pending.
     const captured = snapshot.catch(error => { record(error, env); return null; });
@@ -155,6 +157,12 @@ async function run(env = process.env) {
         await sleep(config.blinkIntervalMs);
         continue;
       }
+      // A /new identity report need not change the native lifecycle status.
+      // Reconcile old unread lamps while this session's monitor is still awake.
+      for (const agent of agents.filter(sessionChanged)) {
+        try { require("./remark").update({ pane_id: agent.pane_id }); }
+        catch (error) { record(error, env); }
+      }
       const byId = new Map(agents.map(agent => [agent.pane_id, agent]));
       const working = config.blink ? agents.filter(agent => agent.agent_status === "working") : [];
       on = !on;
@@ -176,7 +184,9 @@ async function run(env = process.env) {
       const changed = unread.size !== watched.size || [...unread].some(([id, agent]) => {
         const previous = watched.get(id);
         return !previous || previous.terminal_id !== agent.terminal_id ||
+          sessionKey(previous) !== sessionKey(agent) ||
           previous.tokens?.remark_activity !== agent.tokens?.remark_activity ||
+              previous.tokens?.remark_session !== agent.tokens?.remark_session ||
           previous.tokens?.remark_unread !== agent.tokens?.remark_unread;
       });
       watched = unread;

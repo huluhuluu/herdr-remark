@@ -4,16 +4,19 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { completion, activityTokens, stateOf, readTokens, scrollBaseline } = require("../src/tokens");
 
-function observe(pane, status, seq) {
+function observe(pane, status, seq, completed) {
   pane.agent_status = status;
   pane.state_change_seq = seq;
-  Object.assign(pane.tokens, activityTokens(pane));
+  pane.completion_seq = completed;
+  for (const [key, value] of Object.entries(activityTokens(pane))) {
+    if (value == null) delete pane.tokens[key]; else pane.tokens[key] = value;
+  }
 }
 
 test("read completions survive idle/done presentation changes and detection recovery", () => {
   const pane = { terminal_id: "term", tokens: {} };
   observe(pane, "working", 10);
-  observe(pane, "done", 11);
+  observe(pane, "done", 11, 11);
   pane.tokens.remark_seen = completion(pane);
   for (const [status, seq] of [["idle", 11], ["unknown", 12], ["done", 13], ["idle", 13]]) {
     observe(pane, status, seq);
@@ -22,7 +25,7 @@ test("read completions survive idle/done presentation changes and detection reco
     assert.equal(stateOf(pane), "idle");
   }
   observe(pane, "working", 14);
-  observe(pane, "done", 15);
+  observe(pane, "done", 15, 15);
   assert.equal(completion(pane), "15");
   assert.equal(stateOf(pane), "unread");
 });
@@ -39,16 +42,16 @@ test("an idle baseline does not invent a completion when native seen presentatio
 
 test("native done can recover a missed round when the lifecycle sequence advances", () => {
   const pane = { terminal_id: "term", tokens: {} };
-  observe(pane, "done", 1);
+  observe(pane, "done", 1, 1);
   pane.tokens.remark_seen = "1";
-  observe(pane, "done", 3);
+  observe(pane, "done", 3, 3);
   assert.equal(completion(pane), "3");
   assert.equal(stateOf(pane), "unread");
 });
 
 test("an unread completion also survives detection recovery without being acknowledged", () => {
   const pane = { terminal_id: "term", tokens: {} };
-  observe(pane, "done", 1);
+  observe(pane, "done", 1, 1);
   observe(pane, "unknown", 2);
   observe(pane, "idle", 3);
   assert.equal(completion(pane), "1");
@@ -59,13 +62,13 @@ test("observed work survives unknown snapshots until one new completion is recor
   for (const status of ["working", "blocked"]) {
     for (const completed of ["idle", "done"]) {
       const pane = { terminal_id: "term", tokens: {} };
-      observe(pane, "done", 1);
+      observe(pane, "done", 1, 1);
       pane.tokens.remark_seen = "1";
       observe(pane, status, 2);
       observe(pane, "unknown", 3);
       observe(pane, "unknown", 4);
       Object.assign(pane.tokens, readTokens(pane, false));
-      observe(pane, completed, 5);
+      observe(pane, completed, 5, 5);
       assert.equal(completion(pane), "5", `${status} -> unknown -> ${completed}`);
       assert.equal(stateOf(pane), "unread");
       Object.assign(pane.tokens, readTokens(pane, false));
@@ -77,19 +80,19 @@ test("observed work survives unknown snapshots until one new completion is recor
   }
 });
 
-test("a legacy working record also retains pending work through unknown", () => {
+test("a legacy working guess cannot create a native completion after recovery", () => {
   const pane = { terminal_id: "term", tokens: {
     remark_activity: JSON.stringify(["term", "1", "working", null]),
   } };
   observe(pane, "unknown", 2);
   observe(pane, "idle", 3);
-  assert.equal(completion(pane), "3");
-  assert.equal(stateOf(pane), "unread");
+  assert.equal(completion(pane), undefined);
+  assert.equal(stateOf(pane), "idle");
 });
 
 test("viewing an unknown or working agent does not erase its previously read round", () => {
   const pane = { terminal_id: "term", tokens: {} };
-  observe(pane, "done", 1);
+  observe(pane, "done", 1, 1);
   pane.tokens.remark_seen = "1";
   observe(pane, "unknown", 2);
   Object.assign(pane.tokens, readTokens(pane, true, 100));
@@ -99,7 +102,7 @@ test("viewing an unknown or working agent does not erase its previously read rou
   assert.equal(stateOf(pane), "idle");
   observe(pane, "working", 4);
   Object.assign(pane.tokens, readTokens(pane, false));
-  observe(pane, "idle", 5);
+  observe(pane, "idle", 5, 5);
   assert.equal(stateOf(pane), "unread");
 });
 
@@ -107,13 +110,13 @@ test("completion scroll baseline is captured once and belongs to its round", () 
   const initial = { offset_from_bottom: 0, max_offset_from_bottom: 100, viewport_rows: 30 };
   const pane = { terminal_id: "term", tokens: {}, scroll: initial };
   observe(pane, "working", 1);
-  observe(pane, "idle", 2);
+  observe(pane, "idle", 2, 2);
   assert.deepEqual(scrollBaseline(pane), initial);
   pane.scroll = { ...initial, offset_from_bottom: 3 };
   observe(pane, "idle", 2);
   assert.deepEqual(scrollBaseline(pane), initial);
   observe(pane, "working", 3);
-  observe(pane, "idle", 4);
+  observe(pane, "idle", 4, 4);
   assert.deepEqual(scrollBaseline(pane), pane.scroll);
   pane.tokens.remark_unread = "manual";
   pane.tokens.remark_scroll = JSON.stringify(initial);
@@ -126,7 +129,7 @@ test("completion tracking survives Herdr's 80-character metadata limit", () => {
   const scroll = { offset_from_bottom: 0, max_offset_from_bottom: 12000, viewport_rows: 40 };
   const pane = { terminal_id: "term_65e52f6cd53851", tokens: {}, scroll };
   const report = (status, seq) => {
-    observe(pane, status, seq);
+    observe(pane, status, seq, status === "idle" ? seq : undefined);
     for (const key of Object.keys(pane.tokens)) {
       assert.ok(Array.from(pane.tokens[key]).length <= 80, key + " exceeds Herdr's token limit");
       pane.tokens[key] = Array.from(pane.tokens[key]).slice(0, 80).join("");
@@ -152,6 +155,7 @@ test("manual unread scroll positions fit the token limit and old object records 
   pane.tokens = { remark_activity: JSON.stringify(["term", "1", "idle", "1", scroll, false]) };
   pane.agent_status = "idle";
   pane.state_change_seq = 1;
+  pane.completion_seq = 1;
   assert.deepEqual(scrollBaseline(pane), scroll);
 });
 
@@ -162,4 +166,53 @@ test("lamp text includes its glyph within the API limit for long Unicode directo
     assert.ok(Array.from(value).length <= 80);
     assert.ok(value.startsWith("● "));
   }
+});
+
+test("startup and blocked/working transitions without native completed work remain read", () => {
+  for (const active of ["working", "blocked"]) {
+    const pane = { terminal_id: "term", tokens: {} };
+    for (const [status, seq] of [["unknown", 1], [active, 2], ["unknown", 3], ["idle", 4], ["done", 5]]) {
+      observe(pane, status, seq);
+      if (["idle", "done"].includes(status)) {
+        assert.equal(completion(pane), undefined);
+        assert.equal(stateOf(pane), "idle");
+      } else assert.equal(stateOf(pane), status);
+    }
+    observe(pane, "working", 6);
+    observe(pane, "idle", 7, 7);
+    assert.equal(stateOf(pane), "unread", "the first real task still alerts");
+  }
+});
+
+test("new native session ignores the old round, manual mark and scroll baseline", () => {
+  const { sessionKey, isUnread, sameReadState } = require("../src/tokens");
+  const pane = { pane_id: "p1", terminal_id: "term", agent_session: { agent: "custom", kind: "id", value: "first" }, tokens: {} };
+  observe(pane, "idle", 1, 1);
+  Object.assign(pane.tokens, readTokens(pane, true, 100));
+  const before = structuredClone(pane);
+  pane.agent_session.value = "new";
+  pane.completion_seq = undefined;
+  assert.equal(stateOf(pane), "idle");
+  assert.equal(isUnread(pane), false);
+  assert.equal(scrollBaseline(pane), undefined);
+  assert.equal(sameReadState(before, pane), false);
+  assert.notEqual(sessionKey(before), sessionKey(pane));
+  assert.equal(sessionKey(pane).length, 64);
+});
+
+test("a delayed session identity cannot swallow the first real completion", () => {
+  const { sessionKey } = require("../src/tokens");
+  const pane = { terminal_id: "term", agent_status: "idle", completion_seq: 2,
+    agent_session: { agent: "custom", kind: "id", value: "new" }, tokens: {
+      remark_session: sessionKey({ agent_session: { agent: "custom", kind: "id", value: "old" } }), remark_seen: "2",
+    } };
+  assert.equal(stateOf(pane), "unread");
+});
+
+test("an old inferred completion is not adopted as a native unread round", () => {
+  const pane = { terminal_id: "term", agent_status: "idle", state_change_seq: 2,
+    tokens: { remark_activity: '["term","2","idle","2",null,false]' } };
+  assert.equal(stateOf(pane), "idle");
+  observe(pane, "idle", 2);
+  assert.equal(pane.tokens.remark_round, undefined);
 });

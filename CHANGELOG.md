@@ -2,10 +2,12 @@
 
 ## Unreleased
 
+- Require Herdr 0.9.5+ and create unread rounds only from its native completion sequence. New/startup/restore transitions and blocked/working → idle alone no longer invent a completion; retain previously confirmed native unread rounds through detection recovery, without importing older inferred rounds.
+- Track Herdr's reported session identity in addition to the terminal id. Clear inherited read/unread state on a reported /new change, reconcile session-only changes in the monitor, and reject old-session focus, scroll and editor actions. Document the upstream boundary when session identity is missing or delayed.
 - Keep first-read initialization retryable when its metadata write fails, and establish the same baseline when an initial focus event arrives after focus has moved elsewhere. Publish that activity with its original ordering clock so it cannot replace newer work.
 - Preserve POSIX config permissions during installer replacement even under a restrictive umask.
 - Accept UTF-8 BOM plugin settings, including files written by Windows PowerShell, instead of silently reverting to defaults.
-- Establish a read baseline for the first idle/completed Agent snapshot, including historical completions restored on startup and initial unknown detection recovery. Clear inherited read/unread marks when the terminal changes; preserve existing unread rounds on plugin reload and protect concurrent completions/manual marks during initialization.
+- Establish a read baseline for startup/restore snapshots without native completed work. Clear inherited read/unread marks when the terminal changes; preserve existing unread rounds on plugin reload and protect concurrent completions/manual marks during initialization.
 - Capture the read generation before saving a note, so a completion arriving during the rename stays unread. Refuse to save an old editor's note after its Agent has exited.
 - Advance the activity ordering clock on unchanged refreshes too. Delayed working records can no longer overwrite a current idle record and invent an unread completion after detection recovery.
 - Reload the restored config after a failed or partial installation reload. If that runtime rollback also fails, distinguish the restored file from settings that may still be active and print the recovery command.

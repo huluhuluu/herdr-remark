@@ -4,7 +4,8 @@ const herdr = require("./herdr");
 const blink = require("./blink");
 const { clean } = require("./text");
 const { DATA_SOURCE, LAMP_SOURCE, READ_SOURCE, ACTIVITY_SOURCE, DATA_TOKENS, READ_TOKENS,
-  isUnread, lampTokens, readTokens, activity, pendingWork, activityTokens, sameReadState } = require("./tokens");
+  isUnread, lampTokens, readTokens, completion, sessionKey, sessionChanged,
+  activity, pendingWork, activityTokens, sameReadState } = require("./tokens");
 
 function initialNote(pane) {
   return clean(pane.label || pane.tokens?.summary || pane.terminal_title_stripped || pane.title || "");
@@ -24,6 +25,7 @@ function readPane(id) {
       pane.focused = agent.focused;
       pane.state_change_seq = agent.state_change_seq;
       pane.completion_seq = agent.completion_seq;
+      pane.agent_session = agent.agent_session;
       pane.tokens = agent.tokens;
     }
   }
@@ -45,14 +47,16 @@ function update(pane, unread, { acknowledgeFocus = false } = {}) {
   let live = readPane(pane.pane_id);
   if (!live) return false;
   if (pane.terminal_id && pane.terminal_id !== live.terminal_id) return false;
+  if (pane.agent_session && live.agent_session && sessionKey(pane) !== sessionKey(live)) return false;
   expected ||= structuredClone(live);
   const previous = activity(live);
-  const resetRead = !previous && !!live.tokens?.remark_activity;
-  // The first settled snapshot is a baseline, not a newly completed turn.
-  // Unknown detection may precede it; observed work must still complete unread.
+  const resetRead = sessionChanged(live) || (!previous && !!live.tokens?.remark_activity);
+  if (resetRead && sessionKey(expected) !== sessionKey(live)) return false;
+  // Initialize read state only without native completed work. A confirmed
+  // first task remains unread even if its working snapshot was not observed.
   const initial = !previous || (previous[2] === "unknown" && previous[3] == null && !pendingWork(previous));
   const record = live.agent && activityTokens(live);
-  const baseline = !!record && (resetRead || (initial && !live.tokens?.remark_unread &&
+  const baseline = !!record && (resetRead || (initial && completion(live) === undefined && !live.tokens?.remark_unread &&
     ["idle", "done"].includes(live.agent_status)));
   if (record && !baseline) {
     report(live.pane_id, ACTIVITY_SOURCE, seq, record);
@@ -66,7 +70,9 @@ function update(pane, unread, { acknowledgeFocus = false } = {}) {
     // A delayed gesture belongs to the round and manual mark it observed.
     if (live.agent && desired !== undefined && (desired || sameReadState(expected, live))) {
       const target = resetRead ? { ...live, tokens: { ...live.tokens, remark_seen: null } } : live;
-      report(live.pane_id, READ_SOURCE, seq, readTokens(target, desired, seq));
+      const tokens = resetRead && unread === undefined && !(acknowledgeFocus && live.focused)
+        ? Object.fromEntries(READ_TOKENS.map(key => [key, null])) : readTokens(target, desired, seq);
+      report(live.pane_id, READ_SOURCE, seq, tokens);
       // Render the accepted state, even if this action lost to a newer action.
       seq = herdr.sequence();
       if (!baseline) {
@@ -86,7 +92,7 @@ function update(pane, unread, { acknowledgeFocus = false } = {}) {
   }
   if (!live.agent) {
     report(live.pane_id, READ_SOURCE, seq, Object.fromEntries(READ_TOKENS.map(key => [key, null])));
-    report(live.pane_id, ACTIVITY_SOURCE, seq, { remark_activity: null });
+    report(live.pane_id, ACTIVITY_SOURCE, seq, { remark_activity: null, remark_round: null, remark_session: null });
     report(live.pane_id, DATA_SOURCE, seq, Object.fromEntries(DATA_TOKENS.map(key => [key, null])));
     report(live.pane_id, LAMP_SOURCE, seq, lampTokens(live));
     return true;
@@ -110,11 +116,12 @@ function toggle(pane) {
   return isUnread(readPane(pane.pane_id) || pane);
 }
 
-function saveNote(terminalId, note) {
+function saveNote(terminalId, note, expectedSession) {
   const target = herdr.paneForTerminal(terminalId);
   // Keep the round observed before the rename; saving can race a completion.
   const pane = readPane(target.pane_id);
   if (!pane?.agent || pane.terminal_id !== terminalId) throw new Error("目标 Agent 已关闭，未保存备注。");
+  if (expectedSession && expectedSession !== sessionKey(pane)) throw new Error("目标 Agent 会话已切换，未保存备注。");
   const value = clean(note);
   // Herdr trims names; a leading space keeps a literal '--clear' from being an option.
   herdr.cli(["pane", "rename", pane.pane_id, value ? " " + value : "--clear"]);

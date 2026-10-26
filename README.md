@@ -27,7 +27,7 @@ Remark uses Herdr's pane identity and lifecycle API, with **no Agent-name whitel
 | Linux | Yes | Yes | Not implemented |
 | SSH / remote server | Through the target server's API | Both connection paths; see below | No cross-machine native listener forwarding |
 
-Requirements: **Herdr 0.8.2+, Node.js 18+ and Git** available to Herdr's plugin processes. Herdr 0.9.1+ is recommended for native focus-event fixes. `completion_seq`, when supplied by newer Herdr versions, is used without requiring a version-specific adapter.
+Requirements: **Herdr 0.9.5+, Node.js 18+ and Git** available to Herdr's plugin processes. Remark uses Herdr's native `completion_seq` to identify completed work; startup, restore and conversation switching do not create a completion. See [Herdr's completion semantics](https://herdr.dev/docs/agent-automation/).
 
 Windows Terminal scroll-to-read has been confirmed in a live Herdr 0.9.1 session. CI covers Windows, macOS and Linux with Node.js 18/20/22/24; Agent contract tests include Codex, Claude Code, DST/`dsh-tui`, OpenCode, Copilot and arbitrary custom names. These tests verify shared API behavior, **not live installations of every Agent or terminal**. Native macOS/Linux desktop behavior has not been manually verified.
 
@@ -112,17 +112,17 @@ Focus the target Agent. The default `prefix` is `Ctrl+B`: press and release it, 
 | Unread completion or manual mark | Blue `●` |
 | Unknown | Gray `·` |
 
-An Agent's first idle/completed snapshot establishes a **read** baseline, including a restored session's historical completion. Replacing a terminal clears its former occupant's read/unread marks. Reloading Remark preserves existing unread completions and explicit manual marks.
+New and restored conversations without completed work start **read**, including startup that briefly reports working or blocked. A change to Herdr's native `agent_session` clears the former conversation's read/unread marks in the same terminal. Replacing a terminal does the same. Reloading Remark preserves existing unread completions and explicit manual marks.
 
-Subsequent completed turns start **blue**, including in the current Tab. Work observed before the first idle snapshot also completes unread. Staying there or receiving more output does not acknowledge it. A read action clears the current unread mark; the next completion becomes blue again. Working and blocked states take precedence over read state.
+Herdr-confirmed completed turns start **blue**, including the first real task and tasks in the current Tab. Staying there or receiving more output does not acknowledge them. A read action clears the current unread mark; the next completion becomes blue again. Working, blocked and unknown states always follow Herdr and take precedence over the unread lamp.
 
 Read history survives ordinary refreshes and temporary `unknown` detection states. Native `idle`/`done` presentation changes without a new lifecycle generation do not create another completion.
 
-Observed working/blocked rounds also survive temporary `unknown` states and become unread when they return to idle. Detection recovery alone does not create another completion.
+Previously recorded native completions survive temporary `unknown` states. Returning from working or blocked to idle alone does not create an unread turn without a native completion signal.
 
 Read actions are: the toggle shortcut, leaving and returning to the pane, actual terminal scrollback movement, supported content-area wheel input, saving/clearing a note, or renaming the Tab. **Tab renaming acknowledges every Agent in that Tab**, including renames performed by another plugin. Directory, Tab name and Git branch are resolved again on each status refresh; animation ticks only change the lamp.
 
-Notes use the current pane name, Agent summary, or conversation title as their initial value. `Enter` saves, empty input + `Enter` clears, and `Ctrl+C` cancels. A note replaces the native pane name and is limited to 80 Unicode characters. Saving acknowledges the round observed before the rename; a completion or manual mark arriving during the save stays unread. If the Agent has exited, saving stops without renaming its Shell. Renaming a pane outside this shortcut refreshes the displayed note on the next focus or Agent event.
+Notes use the current pane name, Agent summary, or conversation title as their initial value. `Enter` saves, empty input + `Enter` clears, and `Ctrl+C` cancels. A note replaces the native pane name and is limited to 80 Unicode characters. Saving acknowledges the round observed before the rename; a completion or manual mark arriving during the save stays unread. Saving stops if the Agent has exited or its reported session changed while the editor was open. Renaming a pane outside this shortcut refreshes the displayed note on the next focus or Agent event.
 
 ## Settings
 
@@ -169,7 +169,7 @@ Initialization waits for Herdr's refresh action and reloads an existing monitor.
 - **The listener stopped:** run `npm run init`. For input-only diagnostics, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`. This bounded probe changes no read state and does not inspect conversation text.
 - **Refresh failed:** inspect `herdr plugin log list --plugin huluhlu.agent-inform`; verify Node.js/Git/Herdr are available to the existing server's plugin environment. Retry `npm run init` after correcting the cause.
 
-Known API limits: older Herdr versions can only infer active-Tab completions from observed working/blocked → idle transitions. Missed rounds cannot be recovered from an idle snapshot alone. Focus/rename hooks carry no original sequence or user/plugin origin, so a delayed event that still matches current state is not always distinguishable. Screen matching cannot reliably distinguish different sessions displaying identical content. Wheel input at a scroll boundary still counts as viewing. Read marks reset with the Herdr server; native pane notes persist through Herdr.
+Known API limits: same-terminal conversation changes depend on Herdr reporting a changed `agent_session`; if it reports no identity or temporarily retains the old one, Remark cannot identify `/new` yet. Focus/rename hooks carry no original sequence or user/plugin origin, so a delayed event that still matches current state is not always distinguishable. Screen matching cannot reliably distinguish different sessions displaying identical content. Wheel input at a scroll boundary still counts as viewing. Read marks reset with the Herdr server; native pane notes persist through Herdr.
 
 ## Development
 

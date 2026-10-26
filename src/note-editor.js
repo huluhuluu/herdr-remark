@@ -16,7 +16,7 @@ async function edit() {
     rl.write(process.env.REMARK_INITIAL || "");
   });
   rl.close();
-  if (answer !== null) saveNote(process.env.REMARK_TERMINAL, answer);
+  if (answer !== null) saveNote(process.env.REMARK_TERMINAL, answer, process.env.REMARK_SESSION);
 }
 
 edit().catch(e => {

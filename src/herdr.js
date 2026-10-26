@@ -69,6 +69,7 @@ function openEditor(pane, initial) {
     "plugin", "pane", "open", "--plugin", ID, "--entrypoint", "note-editor",
     "--cwd", root, "--focus",
     "--env", "REMARK_TERMINAL=" + pane.terminal_id,
+    "--env", "REMARK_SESSION=" + (require("./tokens").sessionKey(pane) || ""),
     "--env", "REMARK_INITIAL=" + initial,
   ]);
 }
