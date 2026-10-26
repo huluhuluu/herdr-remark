@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reconcile existing lamps during monitor polls so native changes cannot leave a stale lamp after the monitor exits, without acknowledging results or changing native lifecycle state.
+- Treat Tab renames as display updates, including automated renames. They no longer acknowledge unseen results or clear manual marks across the Tab.
 - Require Herdr 0.9.5+ and create unread rounds only from its native completion sequence. New/startup/restore transitions and blocked/working → idle alone no longer invent a completion; retain previously confirmed native unread rounds through detection recovery, without importing older inferred rounds.
 - Track Herdr's reported session identity in addition to the terminal id. Clear inherited read/unread state on a reported /new change, reconcile session-only changes in the monitor, and reject old-session focus, scroll and editor actions. Document the upstream boundary when session identity is missing or delayed.
 - Keep first-read initialization retryable when its metadata write fails, and establish the same baseline when an initial focus event arrives after focus has moved elsewhere. Publish that activity with its original ordering clock so it cannot replace newer work.

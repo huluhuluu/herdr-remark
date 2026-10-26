@@ -821,3 +821,30 @@ test("a scroll captured in the old session cannot read a newly reported session"
   assert.equal(reads, 0);
   assert.equal(refreshed, 1);
 });
+
+test("monitor repairs stale lamps from native state before exiting without acknowledging reads", { timeout: 5000 }, async () => {
+  for (const [status, oldLamp, expected] of [["idle", "unread", "idle"], ["blocked", "idle", "blocked"],
+    ["unknown", "unread", "unknown"], ["working", "idle", "working"]]) {
+    const e = env();
+    settings.load = () => ({ blink: false, blinkIntervalMs: 1, wheelRead: false });
+    const agent = { pane_id: "p1", terminal_id: "term", agent: "custom", agent_status: status,
+      state_change_seq: 2, tokens: { ["remark_lamp_" + oldLamp]: "old", remark_seen: "1", remark_round: "1" } };
+    const writes = [];
+    socket.request = async (method, params) => {
+      if (method === "agent.list") return { agents: [structuredClone(agent)] };
+      assert.equal(method, "pane.report_metadata");
+      assert.equal(params.source, LAMP_SOURCE);
+      writes.push(params);
+      for (const [key, value] of Object.entries(params.tokens)) {
+        if (value == null) delete agent.tokens[key]; else agent.tokens[key] = value;
+      }
+      return {};
+    };
+    await blink.run(e);
+    assert.equal(writes.length, 1, status);
+    assert.ok(agent.tokens["remark_lamp_" + expected]);
+    assert.equal(agent.agent_status, status);
+    assert.equal(agent.tokens.remark_seen, "1");
+    assert.equal(blink.running(e), false);
+  }
+});

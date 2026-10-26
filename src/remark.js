@@ -163,11 +163,9 @@ function event() {
     const tabId = data.tab_id || data.tab?.tab_id;
     const panes = (herdr.cli(["agent", "list"]).agents || []).filter(pane => pane.tab_id === tabId);
     if (!panes.length) return;
-    const tab = herdr.cli(["tab", "list", "--workspace", panes[0].workspace_id])
-      .tabs?.find(item => item.tab_id === tabId);
-    // An older rename may be delivered after another rename. It still refreshes
-    // metadata, but must not acknowledge the current name's unread state.
-    refresh(panes, tab && typeof data.label === "string" && data.label === (tab.label ?? "") ? false : undefined);
+    // A name change, including one made by another plugin, is not evidence
+    // that any result in the Tab was viewed.
+    refresh(panes);
     return;
   }
   const id = data.pane_id || data.pane?.pane_id;

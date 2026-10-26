@@ -10,7 +10,7 @@ const settings = require("./settings");
 const socket = require("./socket");
 const wheel = require("./wheel");
 const monitorLock = require("./monitor-lock");
-const { LAMP_SOURCE, READ_SOURCE, isUnread, lampTokens, readTokens, scrollBaseline,
+const { LAMP_SOURCE, READ_SOURCE, LAMP_TOKENS, isUnread, lampTokens, readTokens, scrollBaseline,
   sameReadState, sessionKey, sessionChanged } = require("./tokens");
 
 // Herdr token styles are static: fg, bold and dim are fixed per token in
@@ -167,6 +167,13 @@ async function run(env = process.env) {
       const working = config.blink ? agents.filter(agent => agent.agent_status === "working") : [];
       on = !on;
       for (const agent of working) touched.add(agent.pane_id);
+      for (const agent of agents) {
+        if (config.blink && agent.agent_status === "working") continue;
+        const tokens = agent.tokens || {};
+        if (!LAMP_TOKENS.some(key => tokens[key] != null)) continue;
+        const expected = lampTokens(agent);
+        if (LAMP_TOKENS.some(key => (tokens[key] ?? null) !== expected[key])) touched.add(agent.pane_id);
+      }
       for (const paneId of touched) {
         const agent = byId.get(paneId) || { pane_id: paneId };
         const animating = config.blink && agent.agent_status === "working";

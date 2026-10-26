@@ -120,7 +120,7 @@ Read history survives ordinary refreshes and temporary `unknown` detection state
 
 Previously recorded native completions survive temporary `unknown` states. Returning from working or blocked to idle alone does not create an unread turn without a native completion signal.
 
-Read actions are: the toggle shortcut, leaving and returning to the pane, actual terminal scrollback movement, supported content-area wheel input, saving/clearing a note, or renaming the Tab. **Tab renaming acknowledges every Agent in that Tab**, including renames performed by another plugin. Directory, Tab name and Git branch are resolved again on each status refresh; animation ticks only change the lamp.
+Read actions are: the toggle shortcut, leaving and returning to the pane, actual terminal scrollback movement, supported content-area wheel input, or saving/clearing a note. **Tab renaming only updates the displayed name**, including renames performed by another plugin. Directory, Tab name and Git branch are resolved again on each status refresh; monitor ticks reconcile existing lamps with native state without acknowledging results.
 
 Notes use the current pane name, Agent summary, or conversation title as their initial value. `Enter` saves, empty input + `Enter` clears, and `Ctrl+C` cancels. A note replaces the native pane name and is limited to 80 Unicode characters. Saving acknowledges the round observed before the rename; a completion or manual mark arriving during the save stays unread. Saving stops if the Agent has exited or its reported session changed while the editor was open. Renaming a pane outside this shortcut refreshes the displayed note on the next focus or Agent event.
 
@@ -169,7 +169,7 @@ Initialization waits for Herdr's refresh action and reloads an existing monitor.
 - **The listener stopped:** run `npm run init`. For input-only diagnostics, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`. This bounded probe changes no read state and does not inspect conversation text.
 - **Refresh failed:** inspect `herdr plugin log list --plugin huluhlu.agent-inform`; verify Node.js/Git/Herdr are available to the existing server's plugin environment. Retry `npm run init` after correcting the cause.
 
-Known API limits: same-terminal conversation changes depend on Herdr reporting a changed `agent_session`; if it reports no identity or temporarily retains the old one, Remark cannot identify `/new` yet. Focus/rename hooks carry no original sequence or user/plugin origin, so a delayed event that still matches current state is not always distinguishable. Screen matching cannot reliably distinguish different sessions displaying identical content. Wheel input at a scroll boundary still counts as viewing. Read marks reset with the Herdr server; native pane notes persist through Herdr.
+Known API limits: same-terminal conversation changes depend on Herdr reporting a changed `agent_session`; if it reports no identity or temporarily retains the old one, Remark cannot identify `/new` yet. Focus hooks carry no original sequence or user/plugin origin, so a delayed event that still matches current state is not always distinguishable. Screen matching cannot reliably distinguish different sessions displaying identical content. Wheel input at a scroll boundary still counts as viewing. Read marks reset with the Herdr server; native pane notes persist through Herdr.
 
 ## Development
 

@@ -132,7 +132,7 @@ test("layout metadata is compact and omits an absent branch", () => {
   assert.equal(pane.tokens.remark_lamp_idle, "○");
 });
 
-test("note and Tab renames acknowledge unread without changing the agent lifecycle", () => {
+test("note saves acknowledge unread while Tab renames only update display fields", () => {
   for (const action of ["note", "tab"]) {
     for (const status of ["idle", "done", "working", "blocked"]) {
       const { pane } = fixture(status);
@@ -148,11 +148,11 @@ test("note and Tab renames acknowledge unread without changing the agent lifecyc
         remark.main("event");
       }
       assert.equal(pane.agent_status, status);
-      assert.equal(pane.tokens.remark_unread, undefined);
-      const lamp = status === "done" ? "idle" : status;
+      assert.equal(pane.tokens.remark_unread, action === "tab" ? "1" : undefined);
+      const lamp = ["idle", "done"].includes(status) ? (action === "tab" ? "unread" : "idle") : status;
       assert.ok(pane.tokens["remark_lamp_" + lamp], `${action}: ${status}`);
       if (status === "done") {
-        assert.equal(pane.tokens.remark_seen, "10");
+        assert.equal(pane.tokens.remark_seen, action === "tab" ? undefined : "10");
         pane.state_change_seq = 11;
         pane.completion_seq = 11;
         remark.update(pane);
@@ -394,17 +394,18 @@ test("a delayed read action cannot acknowledge a completion newer than its targe
   assert.equal(pane.tokens.remark_lamp_unread, "● repo");
 });
 
-test("clearing a Tab label acknowledges its agents", () => {
+test("clearing a Tab label preserves its agents' unread state", () => {
   const { pane } = fixture();
   const cli = herdr.cli;
   herdr.cli = args => args[0] === "tab" ? { tabs: [{ tab_id: pane.tab_id }] } : cli(args);
   remark.update(pane, true);
+  const mark = pane.tokens.remark_unread;
   process.env.HERDR_PLUGIN_EVENT = "tab.renamed";
   process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: pane.tab_id, label: "" } });
   remark.main("event");
-  assert.equal(pane.tokens.remark_unread, undefined);
+  assert.equal(pane.tokens.remark_unread, mark);
   assert.equal(pane.tokens.remark_tab, undefined);
-  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
 });
 
 test("a focus hook uses the newer agent snapshot when focus changes between reads", () => {
@@ -1071,4 +1072,21 @@ test("an identity-less stale batch cannot finalize a new session with the old ma
   remark.update(pane);
   assert.equal(pane.tokens.remark_unread, undefined);
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+});
+
+test("Tab renaming refreshes names without acknowledging unseen results or manual marks", () => {
+  for (const manual of [false, true]) {
+    const { pane } = fixture("idle");
+    Object.assign(pane, { focused: false, state_change_seq: 10, completion_seq: 10 });
+    remark.update(pane, manual ? true : undefined);
+    const mark = pane.tokens.remark_unread;
+    pane.tokens.remark_tab = "Before";
+    process.env.HERDR_PLUGIN_EVENT = "tab.renamed";
+    process.env.HERDR_PLUGIN_EVENT_JSON = JSON.stringify({ data: { tab_id: pane.tab_id, label: "Build" } });
+    remark.main("event");
+    assert.equal(pane.tokens.remark_tab, "Build");
+    assert.equal(pane.tokens.remark_unread, mark);
+    assert.equal(pane.tokens.remark_seen, undefined);
+    assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+  }
 });

@@ -128,14 +128,13 @@ Herdr 确认的真实完成回合会变**蓝色**，包括新会话的第一轮�
          ├─ 离开后重新聚焦 pane
          ├─ 终端回滚位置实际变化
          ├─ 支持的内容区滚轮操作
-         ├─ 保存／清空备注：当前 Agent
-         └─ Tab 改名：该 Tab 下全部 Agent
+         └─ 保存／清空备注：当前 Agent
 
 working → 黄灯；blocked → 红灯；unknown → 灰点
 idle / done → 未读为蓝色 ●，已读为绿色 ○
 ```
 
-Tab 改名包含其他插件触发的自动改名。每次状态刷新重新核对目录、Tab 名和 Git 分支；闪烁间隔只更新灯。
+Tab 改名只更新显示名称，包含其他插件触发的自动改名，不确认已读。每次状态刷新重新核对目录、Tab 名和 Git 分支；监控周期核对已有灯色与原生状态，不确认已读。
 
 备注依次取当前 pane 名、Agent 摘要或会话标题作为初始值。`Enter` 保存，清空后按 `Enter` 删除，`Ctrl+C` 取消；最多 80 个 Unicode 字符，会替换原生 pane 名。保存只确认改名前观察到的回合，保存期间新完成的一轮或新手动标记仍保留未读；Agent 已退出、或编辑期间 Herdr 上报的会话已切换时停止保存。在快捷键之外给 pane 改名后，下次聚焦或 Agent 事件会刷新显示。
 
@@ -184,7 +183,7 @@ npm run init
 - **监听停止：** 执行 `npm run init`。只诊断输入可运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-scroll.ps1 -Seconds 30`；该限时探针不改变已读状态、不读取对话文本。
 - **刷新失败：** 查看 `herdr plugin log list --plugin huluhlu.agent-inform`；确认已有服务器的插件环境能找到 Node.js、Git 和 Herdr。修正后重新执行 `npm run init`。
 
-已知接口边界：同终端切换对话依赖 Herdr 上报变化的 `agent_session`；若没有身份或暂时仍上报旧身份，Remark 此时无法识别 `/new`。聚焦／改名事件没有原始序号和用户／插件来源，仍符合当前状态的迟到事件无法总是区分。不同会话显示完全相同内容时，屏幕匹配无法可靠区分。滚到边界后继续滚轮仍算查看。Herdr 服务器重启后已读标记重置，原生 pane 备注由 Herdr 保存。
+已知接口边界：同终端切换对话依赖 Herdr 上报变化的 `agent_session`；若没有身份或暂时仍上报旧身份，Remark 此时无法识别 `/new`。聚焦事件没有原始序号和用户／插件来源，仍符合当前状态的迟到事件无法总是区分。不同会话显示完全相同内容时，屏幕匹配无法可靠区分。滚到边界后继续滚轮仍算查看。Herdr 服务器重启后已读标记重置，原生 pane 备注由 Herdr 保存。
 
 ## 开发
 
