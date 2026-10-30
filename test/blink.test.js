@@ -12,7 +12,7 @@ beforeEach(() => { wheel.start = () => ({ close() {} }); });
 const { clean, directory } = require("../src/text");
 const herdr = require("../src/herdr");
 const remark = require("../src/remark");
-const { LAMP_SOURCE, READ_SOURCE, lampTokens } = require("../src/tokens");
+const { LAMP_SOURCE, READ_SOURCE, ACTIVITY_SOURCE, lampTokens } = require("../src/tokens");
 const net = require("node:net");
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "remark-test-"));
@@ -450,7 +450,7 @@ test("scrolling after an automatic completion but before monitor startup is ackn
   const initial = { offset_from_bottom: 0, max_offset_from_bottom: 100, viewport_rows: 30 };
   const { activityTokens } = require("../src/tokens");
   const agent = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "working",
-    state_change_seq: 1, tokens: {}, scroll: initial };
+    state_change_seq: 1, tokens: { remark_activity: '["term1","0","idle",null,null,1]' }, scroll: initial };
   Object.assign(agent.tokens, activityTokens(agent));
   agent.agent_status = "done";
   agent.state_change_seq = 2;
@@ -471,13 +471,13 @@ test("scrolling after an automatic completion but before monitor startup is ackn
   assert.equal(writes, 1);
 });
 
-test("a completion baseline published after subscription setup is reconciled", async () => {
+test("the monitor captures completion before its status hook publishes a baseline", async () => {
   const e = env();
   settings.load = () => ({ blink: false, blinkIntervalMs: 1, wheelRead: false });
   const initial = { offset_from_bottom: 0, max_offset_from_bottom: 100, viewport_rows: 30 };
   const { activityTokens } = require("../src/tokens");
   const agent = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "working",
-    state_change_seq: 1, tokens: {}, scroll: initial };
+    state_change_seq: 1, tokens: { remark_activity: '["term1","0","idle",null,null,1]' }, scroll: initial };
   Object.assign(agent.tokens, activityTokens(agent));
   agent.agent_status = "done";
   agent.state_change_seq = 2;
@@ -490,6 +490,7 @@ test("a completion baseline published after subscription setup is reconciled", a
       return { agents: polls < 8 ? [structuredClone(agent)] : [] };
     }
     if (method === "pane.list") return { panes: [{ pane_id: "p1", scroll: { ...initial, offset_from_bottom: 3 } }] };
+    if (params.source === ACTIVITY_SOURCE) { Object.assign(agent.tokens, params.tokens); return {}; }
     assert.equal(params.source, READ_SOURCE);
     writes++;
     agent.tokens.remark_seen = "2";
@@ -532,6 +533,7 @@ test("the first scroll after a state transition uses a fresh generation", async 
     agent.agent_status = "done";
     agent.state_change_seq = 2;
     agent.completion_seq = 2;
+    agent.tokens.remark_activity = '["term1","1","working",null,null,2]';
     onEvent({ event: "pane.scroll_changed", data: { pane_id: "p1", scroll: { ...scroll, offset_from_bottom: 3 } } });
   }) });
   await blink.run(e);
@@ -561,16 +563,18 @@ test("a completion after the scroll snapshot is not acknowledged by that scroll"
   settings.load = () => ({ blink: false, blinkIntervalMs: 1 });
   const e = env();
   const agent = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "done",
-    state_change_seq: 1, completion_seq: 1, tokens: {} };
+    state_change_seq: 1, completion_seq: 1, tokens: {
+      remark_activity: '["term1","1","done","1",null,1]', remark_round: "1" } };
   const scroll = { offset_from_bottom: 0, max_offset_from_bottom: 100, viewport_rows: 30 };
   let lists = 0, reads = 0;
-  socket.request = async method => {
+  socket.request = async (method, params) => {
     if (method === "agent.list") {
       const snapshot = structuredClone(agent);
       if (++lists === 2) agent.state_change_seq = 2;
       return { agents: lists < 4 ? [snapshot] : [] };
     }
     if (method === "pane.list") return { panes: [{ pane_id: "p1", scroll }] };
+    if (params.source === ACTIVITY_SOURCE) { Object.assign(agent.tokens, params.tokens); return {}; }
     reads++;
     return {};
   };
@@ -683,7 +687,8 @@ test("scrolling while the subscription is being established is not lost", async 
   settings.load = () => ({ blink: false, blinkIntervalMs: 1 });
   const e = env();
   const agent = { pane_id: "p1", terminal_id: "term1", agent: "codex", agent_status: "done",
-    state_change_seq: 1, completion_seq: 1, tokens: {} };
+    state_change_seq: 1, completion_seq: 1, tokens: {
+      remark_activity: '["term1","1","done","1",null,1]', remark_round: "1" } };
   let offset = 0, lists = 0, reads = 0;
   remark.update = () => {};
   socket.request = async (method, params) => {
@@ -847,4 +852,31 @@ test("monitor repairs stale lamps from native state before exiting without ackno
     assert.equal(agent.tokens.remark_seen, "1");
     assert.equal(blink.running(e), false);
   }
+});
+
+test("the monitor records post-readiness work when its lifecycle hook is delayed", { timeout: 5000 }, async () => {
+  const e = env();
+  settings.load = () => ({ blink: false, blinkIntervalMs: 1, wheelRead: false });
+  const agent = { pane_id: "p1", terminal_id: "term", agent: "custom", agent_status: "working", state_change_seq: 2,
+    tokens: { remark_activity: '["term","1","idle",null,null,1]' } };
+  let polls = 0;
+  const writes = [];
+  socket.request = async (method, params) => {
+    if (method === "agent.list") {
+      if (++polls >= 2) Object.assign(agent, { agent_status: "idle", state_change_seq: 3, completion_seq: 3 });
+      // A subsequent view lets the monitor stop; the monitor itself must not acknowledge it.
+      if (polls >= 3) agent.tokens.remark_seen = "3";
+      return { agents: [structuredClone(agent)] };
+    }
+    if (method === "pane.list") return { panes: [] };
+    assert.equal(params.source, ACTIVITY_SOURCE);
+    writes.push(params.tokens);
+    Object.assign(agent.tokens, params.tokens);
+    return {};
+  };
+  socket.subscribe = () => ({ ready: Promise.resolve(), closed: false, close() {} });
+  await blink.run(e);
+  assert.equal(JSON.parse(writes[0].remark_activity)[5], 2);
+  assert.equal(writes[1].remark_round, "3");
+  assert.equal(blink.running(e), false);
 });

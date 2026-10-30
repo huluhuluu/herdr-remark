@@ -35,7 +35,7 @@ function expandScroll(scroll) {
 
 function activity(pane) {
   try {
-    // [terminal, state sequence, status, completed round, scroll baseline, pending work]
+    // [terminal, state sequence, status, completed round, scroll baseline, phase]
     const value = JSON.parse(pane.tokens?.remark_activity || "null");
     if (!Array.isArray(value) || value[0] !== pane.terminal_id || sessionChanged(pane)) return null;
     value[4] = expandScroll(value[4]);
@@ -56,16 +56,30 @@ function sessionChanged(pane) {
   return !!current && !!pane.tokens?.remark_session && current !== pane.tokens.remark_session;
 }
 
+// 0: acquiring a conversation, 1: ready, 2: work observed after readiness.
+// Keep this in the existing compact slot; startup and blocked-only recovery
+// must not acquire the same completion authority as an actual working turn.
+function phase(previous) {
+  if (!previous) return 0;
+  if (typeof previous[5] === "number") return previous[5];
+  // Older records counted blocked as work. Migrate only an observed working
+  // state as pending; preserve already recorded completions independently.
+  if (previous[2] === "working") return 2;
+  return previous[3] != null || ["idle", "done"].includes(previous[2]) ? 1 : 0;
+}
+
 function pendingWork(previous) {
-  return !!previous && (previous[5] === true || ["working", "blocked"].includes(previous[2]));
+  return phase(previous) === 2;
 }
 
 function completion(pane) {
   if (!["idle", "done"].includes(pane.agent_status)) return undefined;
-  // Only Herdr can establish a new round. Retain a previously observed native
-  // completion through detection recovery, but never import legacy guesses.
-  if (pane.completion_seq != null) return String(pane.completion_seq);
-  return activity(pane) ? pane.tokens?.remark_round ?? undefined : undefined;
+  const previous = activity(pane);
+  const recorded = previous ? pane.tokens?.remark_round ?? undefined : undefined;
+  // A native completion can predate our first observation or follow blocked -> idle.
+  // Admit a new round only after this conversation was ready and then worked.
+  if (pane.completion_seq != null && pendingWork(previous)) return String(pane.completion_seq);
+  return recorded;
 }
 
 function activityTokens(pane) {
@@ -75,10 +89,12 @@ function activityTokens(pane) {
   // newly reported native completion replaces its generation.
   const turn = completion(pane) ?? (previous ? pane.tokens?.remark_round : null) ?? null;
   const scroll = turn === previous?.[3] ? previous[4] ?? null : pane.scroll ?? null;
-  const pending = ["working", "blocked"].includes(pane.agent_status) ||
-    (pane.agent_status === "unknown" && pendingWork(previous));
+  const prior = phase(previous);
+  const next = ["idle", "done"].includes(pane.agent_status) ? 1 :
+    pane.agent_status === "blocked" ? (prior ? 1 : 0) :
+    prior && pane.agent_status === "working" ? 2 : prior;
   const value = JSON.stringify([pane.terminal_id, String(pane.state_change_seq),
-    pane.agent_status, turn, turn ? compactScroll(scroll) : null, pending]);
+    pane.agent_status, turn, turn ? compactScroll(scroll) : null, next]);
   // Even an unchanged record must advance this source's ordering clock so a
   // delayed report cannot restore an older working state after this refresh.
   return { remark_activity: value, remark_round: turn,

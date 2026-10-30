@@ -112,13 +112,15 @@ Focus the target Agent. The default `prefix` is `Ctrl+B`: press and release it, 
 | Unread completion or manual mark | Blue `●` |
 | Unknown | Gray `·` |
 
-New and restored conversations without completed work start **read**, including startup that briefly reports working or blocked. A change to Herdr's native `agent_session` clears the former conversation's read/unread marks in the same terminal. Replacing a terminal does the same. Reloading Remark preserves existing unread completions and explicit manual marks.
+New, restored and newly identified conversations start **read** at their first idle/done snapshot, including startup that briefly reports working or blocked or already carries a native completion sequence. A change to Herdr's native `agent_session` clears the former conversation's read/unread marks in the same terminal. Replacing a terminal does the same. Reloading Remark preserves existing unread completions and explicit manual marks.
 
-Herdr-confirmed completed turns start **blue**, including the first real task and tasks in the current Tab. Staying there or receiving more output does not acknowledge them. A read action clears the current unread mark; the next completion becomes blue again. Working, blocked and unknown states always follow Herdr and take precedence over the unread lamp.
+After that baseline, an observed working turn followed by a native completion starts **blue**, including the first task after readiness and tasks in the current Tab. Staying there or receiving more output does not acknowledge them. A read action clears the current unread mark; the next completed task becomes blue again. Working, blocked and unknown states always follow Herdr and take precedence over the unread lamp.
 
 Read history survives ordinary refreshes and temporary `unknown` detection states. Native `idle`/`done` presentation changes without a new lifecycle generation do not create another completion.
 
 Previously recorded native completions survive temporary `unknown` states. Returning from working or blocked to idle alone does not create an unread turn without a native completion signal.
+
+Quota recovery, login/approval dialogs closing, idle refreshes and detection recovery do not create a new unread round by themselves, even if Herdr supplies a new completion sequence. After a blocked state, work must resume before a completion can alert. These events preserve earlier unread results and manual marks. A turn whose working state is never observed, or which finishes before the initial read baseline, does not generate an automatic alert.
 
 Read actions are: the toggle shortcut, leaving and returning to the pane, actual terminal scrollback movement, supported content-area wheel input, or saving/clearing a note. **Tab renaming only updates the displayed name**, including renames performed by another plugin. Directory, Tab name and Git branch are resolved again on each status refresh; monitor ticks reconcile existing lamps with native state without acknowledging results.
 

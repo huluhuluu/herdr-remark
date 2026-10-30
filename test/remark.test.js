@@ -48,6 +48,13 @@ function fixture(status = "idle") {
   };
   return { pane, calls };
 }
+
+// Established conversations with a task in flight. Fresh/startup tests leave
+// this absent so the first settled snapshot must establish a read baseline.
+function observedWork(pane) {
+  pane.tokens.remark_activity = JSON.stringify([pane.terminal_id, String(pane.state_change_seq ?? 0),
+    "working", pane.tokens.remark_round ?? null, null, 2]);
+}
 test("status lamp combines native state and idle unread", () => {
   const { pane } = fixture();
   for (const [status, unread, lamp, icon] of [
@@ -80,6 +87,7 @@ test("native completion is acknowledged without changing state labels", () => {
   const { pane, calls } = fixture("done");
   pane.state_change_seq = 1;
   pane.completion_seq = 1;
+  observedWork(pane);
   pane.state_labels = { idle: "custom label" };
   assert.equal(remark.toggle(pane), false);
   assert.ok(calls.every(args => args[1] !== "focus"));
@@ -139,6 +147,7 @@ test("note saves acknowledge unread while Tab renames only update display fields
       pane.state_change_seq = 10;
       if (status === "done") pane.completion_seq = 10;
       pane.tokens = { remark_unread: "1" };
+      observedWork(pane);
       if (action === "note") {
         herdr.paneForTerminal = () => pane;
         remark.saveNote("term", "updated note");
@@ -155,6 +164,7 @@ test("note saves acknowledge unread while Tab renames only update display fields
         assert.equal(pane.tokens.remark_seen, action === "tab" ? undefined : "10");
         pane.state_change_seq = 11;
         pane.completion_seq = 11;
+        observedWork(pane);
         remark.update(pane);
         assert.equal(pane.tokens.remark_lamp_unread, "● repo");
       }
@@ -387,6 +397,7 @@ test("a delayed read action cannot acknowledge a completion newer than its targe
   Object.assign(pane, { state_change_seq: 10, completion_seq: 9 });
   remark.update(pane);
   const target = structuredClone(pane);
+  observedWork(pane);
   pane.state_change_seq = 12;
   pane.completion_seq = 11;
   remark.update(target, false);
@@ -423,6 +434,7 @@ test("a focus hook uses the newer agent snapshot when focus changes between read
 test("active-tab native completions turn blue independently of the Agent name", () => {
   for (const agent of ["codex", "dsh-tui", "dst", "claude", "opencode", "copilot", "custom-agent"]) {
     const { pane } = fixture("working");
+    observedWork(pane);
     pane.agent = agent;
     pane.state_change_seq = 10;
     remark.update(pane);
@@ -435,10 +447,14 @@ test("active-tab native completions turn blue independently of the Agent name", 
     assert.equal(pane.tokens.remark_lamp_unread, "● repo");
     remark.toggle(pane);
     assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+    pane.agent_status = "working";
+    remark.update(pane);
     pane.agent_status = "blocked";
     pane.state_change_seq = 12;
     remark.update(pane);
     assert.equal(pane.tokens.remark_lamp_blocked, "● repo");
+    pane.agent_status = "working";
+    remark.update(pane);
     pane.agent_status = "idle";
     pane.state_change_seq = 13;
     pane.completion_seq = 13;
@@ -459,6 +475,7 @@ test("native completion_seq is independent of native seen state and state_change
   pane.state_change_seq = 51;
   remark.update(pane);
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  observedWork(pane);
   pane.completion_seq = 52;
   remark.update(pane);
   assert.equal(pane.tokens.remark_lamp_unread, "● repo");
@@ -502,6 +519,7 @@ test("idle alone and a replaced terminal do not invent a completion", () => {
 
 test("viewing during work does not acknowledge the completion that follows", () => {
   const { pane } = fixture("working");
+  observedWork(pane);
   pane.state_change_seq = 10;
   remark.update(pane, false);
   assert.equal(pane.tokens.remark_seen, undefined);
@@ -664,6 +682,7 @@ test("toggle renders the accepted unread state after acknowledging completion", 
   const { pane, calls } = fixture("done");
   pane.state_change_seq = 1;
   pane.completion_seq = 1;
+  observedWork(pane);
   assert.equal(remark.toggle(pane), false);
   assert.ok(calls.every(args => args[1] !== "focus"));
   assert.equal(pane.agent_status, "done");
@@ -740,9 +759,11 @@ test("viewing one completion does not mark the next completion as read", () => {
   const { pane } = fixture("done");
   pane.state_change_seq = 10;
   pane.completion_seq = 10;
+  observedWork(pane);
   remark.update(pane, false);
   assert.equal(pane.tokens.remark_seen, "10");
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  observedWork(pane);
   pane.state_change_seq = 12;
   pane.completion_seq = 12;
   remark.update(pane);
@@ -753,6 +774,7 @@ test("batch refresh after detection recovery preserves read state in unrelated a
   const { pane } = fixture("done");
   pane.state_change_seq = 10;
   pane.completion_seq = 10;
+  observedWork(pane);
   remark.update(pane, false);
   const other = { ...structuredClone(pane), pane_id: "w1:p2", terminal_id: "other-term" };
   other.tokens = { remark_activity: JSON.stringify([other.terminal_id, "20", "idle", "20"]),
@@ -862,6 +884,7 @@ test("initial baseline cannot acknowledge a completion arriving after its snapsh
   herdr.cli = args => {
     const result = cli(args);
     if (args[1] === "report-metadata" && args.includes(ACTIVITY_SOURCE)) {
+      observedWork(pane);
       pane.state_change_seq = 12;
       pane.completion_seq = 11;
     }
@@ -886,7 +909,7 @@ test("initial baseline cannot clear a manual unread mark arriving during initial
   assert.equal(pane.tokens.remark_lamp_unread, "● repo");
 });
 
-test("work observed during initial detection recovery still finishes unread", () => {
+test("initial detection and blocked-only recovery establish readiness without unread", () => {
   const { pane } = fixture("unknown");
   for (const [status, seq] of [["unknown", 1], ["blocked", 2], ["unknown", 3], ["idle", 4]]) {
     pane.agent_status = status;
@@ -894,7 +917,7 @@ test("work observed during initial detection recovery still finishes unread", ()
     if (status === "idle") pane.completion_seq = 4;
     remark.update(pane);
   }
-  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
 });
 
 test("a note save acknowledges its observed round, not a completion arriving during rename", () => {
@@ -906,6 +929,7 @@ test("a note save acknowledges its observed round, not a completion arriving dur
   herdr.cli = args => {
     const result = cli(args);
     if (args[1] === "rename") {
+      observedWork(pane);
       pane.state_change_seq = 12;
       pane.completion_seq = 11;
     }
@@ -952,6 +976,7 @@ test("a late focus event still establishes a new pane's initial read baseline", 
   remark.main("event");
   assert.equal(pane.tokens.remark_seen, undefined);
   assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
+  observedWork(pane);
   pane.state_change_seq = 12;
   pane.completion_seq = 11;
   remark.main("event");
@@ -959,7 +984,7 @@ test("a late focus event still establishes a new pane's initial read baseline", 
   assert.equal(pane.tokens.remark_lamp_unread, "● repo");
 });
 
-test("delayed baseline publication cannot replace a newer working activity record", () => {
+test("delayed baseline publication cannot replace a newer startup activity record", () => {
   const { pane } = fixture("done");
   pane.state_change_seq = 1;
   const cli = herdr.cli;
@@ -974,6 +999,8 @@ test("delayed baseline publication cannot replace a newer working activity recor
     return cli(args);
   };
   remark.update(pane);
+  assert.equal(JSON.parse(pane.tokens.remark_activity)[1], "2");
+  assert.equal(JSON.parse(pane.tokens.remark_activity)[2], "working");
   for (const [status, seq] of [["unknown", 3], ["idle", 4]]) {
     pane.agent_status = status;
     pane.state_change_seq = seq;
@@ -981,7 +1008,7 @@ test("delayed baseline publication cannot replace a newer working activity recor
     remark.update(pane);
   }
   assert.equal(pane.tokens.remark_seen, undefined);
-  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo", "work before readiness is still startup");
 });
 
 test("/new in the same terminal clears old native and manual unread without a status change", () => {
@@ -989,6 +1016,7 @@ test("/new in the same terminal clears old native and manual unread without a st
     const { pane } = fixture("idle");
     Object.assign(pane, { state_change_seq: 1, completion_seq: 1,
       agent_session: { agent: "custom", kind: "id", value: "first" } });
+    observedWork(pane);
     remark.update(pane);
     if (manual) remark.update(pane, true);
     assert.equal(pane.tokens.remark_lamp_unread, "● repo");
@@ -1011,15 +1039,15 @@ test("/new in the same terminal clears old native and manual unread without a st
   }
 });
 
-test("a native completion first observed in a new terminal remains unread", () => {
+test("a native completion first observed in a new terminal starts read", () => {
   const { pane } = fixture("idle");
   Object.assign(pane, { state_change_seq: 1, completion_seq: 1 });
   remark.update(pane);
-  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
   assert.equal(pane.tokens.remark_seen, undefined);
 });
 
-test("late session identity reports preserve the first real completion and block old read actions", () => {
+test("late session identity reports establish readiness and block old read actions", () => {
   const { pane } = fixture("idle");
   Object.assign(pane, { state_change_seq: 1, completion_seq: 1,
     agent_session: { agent: "custom", kind: "id", value: "first" } });
@@ -1031,7 +1059,7 @@ test("late session identity reports preserve the first real completion and block
   assert.equal(JSON.stringify(pane.tokens), reports);
   remark.update(pane);
   assert.equal(pane.tokens.remark_seen, undefined);
-  assert.equal(pane.tokens.remark_lamp_unread, "● repo");
+  assert.equal(pane.tokens.remark_lamp_idle, "○ repo");
 });
 
 test("learning the first session id or changing its source preserves existing unread", () => {
@@ -1078,6 +1106,7 @@ test("Tab renaming refreshes names without acknowledging unseen results or manua
   for (const manual of [false, true]) {
     const { pane } = fixture("idle");
     Object.assign(pane, { focused: false, state_change_seq: 10, completion_seq: 10 });
+    observedWork(pane);
     remark.update(pane, manual ? true : undefined);
     const mark = pane.tokens.remark_unread;
     pane.tokens.remark_tab = "Before";
@@ -1089,4 +1118,33 @@ test("Tab renaming refreshes names without acknowledging unseen results or manua
     assert.equal(pane.tokens.remark_seen, undefined);
     assert.equal(pane.tokens.remark_lamp_unread, "● repo");
   }
+});
+
+test("quota and dialog recovery across a batch preserves reads and earlier unread results", () => {
+  const { pane, calls } = fixture("idle");
+  const panes = ["read", "result-unread", "manual-unread"].map((kind, i) => ({ ...structuredClone(pane),
+    pane_id: "w1:p" + (i + 1), terminal_id: "term" + i, state_change_seq: 10, completion_seq: 10,
+    tokens: { remark_activity: JSON.stringify(["term" + i, "10", "idle", "10", null, 1]),
+      remark_round: "10", ...(kind === "result-unread" ? {} : { remark_seen: "10" }),
+      ...(kind === "manual-unread" ? { remark_unread: "explicit" } : {}) } }));
+  const cli = herdr.cli;
+  herdr.cli = args => {
+    if (args[0] === "agent") return { agents: structuredClone(panes) };
+    const live = panes.find(item => item.pane_id === args[2]);
+    if (args[1] === "get") return { pane: structuredClone(live) };
+    if (args[1] === "report-metadata") { applyMetadata(args, live); return {}; }
+    return cli(args);
+  };
+  for (const [status, seq] of [["working", 11], ["blocked", 12], ["unknown", 13], ["idle", 14]]) {
+    for (const item of panes) Object.assign(item, { agent_status: status, state_change_seq: seq,
+      completion_seq: status === "idle" ? seq : undefined });
+    remark.main("init");
+  }
+  assert.equal(panes[0].tokens.remark_lamp_idle, "○ repo");
+  assert.equal(panes[0].tokens.remark_seen, "10");
+  assert.equal(panes[1].tokens.remark_lamp_unread, "● repo");
+  assert.equal(panes[1].tokens.remark_round, "10");
+  assert.equal(panes[2].tokens.remark_unread, "explicit");
+  assert.equal(panes[2].tokens.remark_lamp_unread, "● repo");
+  assert.ok(calls.every(args => !["report-agent", "focus", "clear-agent"].includes(args[1])));
 });

@@ -10,7 +10,7 @@ const settings = require("./settings");
 const socket = require("./socket");
 const wheel = require("./wheel");
 const monitorLock = require("./monitor-lock");
-const { LAMP_SOURCE, READ_SOURCE, LAMP_TOKENS, isUnread, lampTokens, readTokens, scrollBaseline,
+const { LAMP_SOURCE, READ_SOURCE, ACTIVITY_SOURCE, LAMP_TOKENS, activity, activityTokens, isUnread, lampTokens, readTokens, scrollBaseline,
   sameReadState, sessionKey, sessionChanged } = require("./tokens");
 
 // Herdr token styles are static: fg, bold and dim are fixed per token in
@@ -159,9 +159,22 @@ async function run(env = process.env) {
       }
       // A /new identity report need not change the native lifecycle status.
       // Reconcile old unread lamps while this session's monitor is still awake.
-      for (const agent of agents.filter(sessionChanged)) {
-        try { require("./remark").update({ pane_id: agent.pane_id }); }
-        catch (error) { record(error, env); }
+      for (const agent of agents) {
+        try {
+          if (sessionChanged(agent)) {
+            require("./remark").update({ pane_id: agent.pane_id });
+          } else if (activity(agent)) {
+            // Polling can see a turn before its hook runs. Persist that observed
+            // work/completion too, using the same ordering source as the hooks.
+            const tokens = activityTokens(agent);
+            if (tokens && tokens.remark_activity !== agent.tokens.remark_activity) {
+              await socket.request("pane.report_metadata", {
+                pane_id: agent.pane_id, source: ACTIVITY_SOURCE, seq, tokens,
+              }, options);
+              agent.tokens = { ...agent.tokens, ...tokens };
+            }
+          }
+        } catch (error) { record(error, env); }
       }
       const byId = new Map(agents.map(agent => [agent.pane_id, agent]));
       const working = config.blink ? agents.filter(agent => agent.agent_status === "working") : [];

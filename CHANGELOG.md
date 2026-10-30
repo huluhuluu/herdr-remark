@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Establish a read baseline before accepting automatic completions in new/restored conversations, even when startup reports working or the first snapshot carries a native completion. Require observed working after readiness; blocked recovery needs resumed work. Quota resets, dialogs closing and idle/unknown refreshes cannot reopen read results just by changing completion_seq. Preserve earlier unread/manual marks and native lifecycle colors, without Agent-name or message-text rules.
+- Let the existing monitor persist observed work/completion generations when lifecycle hooks are delayed. Keep the compact activity token within Herdr's existing limit and migrate older records without treating blocked alone as pending work.
+
 - Reconcile existing lamps during monitor polls so native changes cannot leave a stale lamp after the monitor exits, without acknowledging results or changing native lifecycle state.
 - Treat Tab renames as display updates, including automated renames. They no longer acknowledge unseen results or clear manual marks across the Tab.
 - Require Herdr 0.9.5+ and create unread rounds only from its native completion sequence. New/startup/restore transitions and blocked/working → idle alone no longer invent a completion; retain previously confirmed native unread rounds through detection recovery, without importing older inferred rounds.
